@@ -1,0 +1,13 @@
+build/
+dist/
+__pycache__/
+*.pyc
+*.log
+*.spec
+*.zip
+*.bak-ui
+shot_*.png
+mix18_4/
+repair18*/
+FabricMedic-release/
+check_flow.py
