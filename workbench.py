@@ -80,17 +80,25 @@ class Workbench:
         self.settings=ttk.Frame(self.deck,padding=30)
         self.pages={'home':self.home,'version':self.version_page,'settings':self.settings}
         self.home.place(relwidth=1,relheight=1)
+        footer=ttk.Frame(self.home)
+        footer.pack(side='bottom',fill='x')
+        ttk.Separator(footer).pack(fill='x',pady=(8,6))
+        ttk.Label(footer,text='声明',font=('Microsoft YaHei UI',11,'bold')).pack(anchor='w')
+        statement=ttk.Label(footer,text='本工具仅供学习和参考。检测结果与修复建议请以游戏实际启动和运行情况为准，本工具无法保证解决所有模组冲突。感谢大家使用 Fabric Medic。',style='Muted.TLabel',justify='left',wraplength=500)
+        statement.pack(fill='x',pady=(3,0))
+        footer.bind('<Configure>',lambda e:statement.configure(wraplength=max(100,e.width)))
         ttk.Label(self.home,text='Fabric Medic  /  更新记录',style='Muted.TLabel').pack(anchor='w')
         ttk.Separator(self.home).pack(fill='x',pady=(12,22))
         ttk.Label(self.home,text='更新内容',style='Title.TLabel').pack(anchor='w')
         for release,lines in [
+            ('v18.7.1',('主页新增使用声明，说明卡片支持渐显和渐隐。',)),
             ('v18.7',('工作台按冲突和缺失前置筛选，输出区单独显示处理结果。',)),
             ('v18.6.1',('修复切换主题后主页和设置图标消失的问题。',)),
             ('v18.6',('主页集中展示更新记录。','点击左侧版本名称可查看模组、依赖和冲突。')),
             ('v18.5.6',('启动说明移到主窗口内，修复说明被遮挡时无法操作的问题。',)),
             ('v18.5.5',('调整窗口拖动定位，给说明卡片加上灰色轮廓。',)),
         ]:
-            ttk.Label(self.home,text=release,font=('Segoe UI',13,'bold')).pack(anchor='w',pady=(18,5))
+            ttk.Label(self.home,text=release,font=('Segoe UI',13,'bold')).pack(anchor='w',pady=(12,3))
             for line in lines:
                 ttk.Label(self.home,text='•  '+line,wraplength=500).pack(anchor='w',pady=2)
         head=ttk.Frame(self.version_page)
@@ -353,14 +361,37 @@ class Workbench:
         if notice is not None and notice.winfo_exists():
             notice.lift()
             return
-        notice=self.notice=round_widget(tk.Frame(self.win,bg='#777777'),12)
-        shell=round_widget(ttk.Frame(notice,padding=22),11)
+        surface=self.colors[0]
+        notice=self.notice=round_widget(tk.Frame(self.win,bg=surface),12)
+        shell=round_widget(tk.Frame(notice,bg=surface,padx=22,pady=22),11)
         shell.pack(fill='both',expand=True,padx=1,pady=1)
-        ttk.Label(shell,text='说明',style='Title.TLabel').pack(anchor='w')
-        ttk.Label(shell,text='修复了一些已知的问题。').pack(anchor='w',pady=14)
-        button=self.button(shell,'确定',notice.destroy)
+        title=tk.Label(shell,text='说明',bg=surface,font=('Microsoft YaHei UI',18,'bold'))
+        title.pack(anchor='w')
+        message=tk.Label(shell,text='修复了一些已知的问题。',bg=surface,font=('Microsoft YaHei UI',10))
+        message.pack(anchor='w',pady=14)
+        amount=0
+        closing=False
+        def fade(value):
+            nonlocal amount
+            amount=value
+            surface=self.colors[0]
+            def blend(target):
+                return '#%02x%02x%02x'%tuple(round(int(surface[i:i+2],16)*(1-value)+int(target[i:i+2],16)*value) for i in (1,3,5))
+            notice.configure(bg=blend('#777777'))
+            shell.configure(bg=surface)
+            for label in (title,message):
+                label.configure(bg=surface,fg=blend(inverse(surface)))
+            button.configure(bg=blend(self.colors[1]),fg=blend(inverse(self.colors[1])))
+        def close():
+            nonlocal closing
+            if closing:return
+            closing=True
+            start=amount
+            self.ease('notice_card',lambda t:fade(start*(1-t)),notice.destroy,motion='window',seconds=.18)
+        button=self.button(shell,'确定',close)
         button.pack(anchor='e')
-        button.bind('<Escape>',lambda e:notice.destroy())
+        button.bind('<Escape>',lambda e:close())
+        self.ease('notice_card',fade,motion='window',seconds=.22)
         notice.place(relx=.5,rely=.5,anchor='center')
         notice.lift()
         button.focus_set()
