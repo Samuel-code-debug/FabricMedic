@@ -38,16 +38,20 @@ class Workbench:
         self.rail.pack(side='left',fill='y')
         self.rail.pack_propagate(False)
         ttk.Label(self.rail,text='工作空间',style='Side.TLabel').pack(anchor='w',pady=(0,12))
-        for text,page,icon in [('主页','home','⌂'),('设置','settings','⚙')]:
+        for text,page,symbol in [('主页','home',(
+                '.....##.....','....####....','...##..##...','..##....##..','.##......##.',
+                '##........##','..#......#..','..#......#..','..#..##..#..','..####.###..')),
+                ('设置','settings',(
+                '.....##.....','..##.##.##..','..########..','...##..##...','.###....###.',
+                '.###....###.','...##..##...','..########..','..##.##.##..','.....##.....'))]:
             button=self.button(self.rail,text,lambda p=page:self.navigate(p))
+            # A bitmap on the label shares its paint cycle and pointer target.
+            bitmap=tk.PhotoImage(width=20,height=len(symbol))
+            button.icon_pixels=[(x,y) for y,row in enumerate(symbol)
+                                for x,pixel in enumerate(row) if pixel=='#']
+            button.icon_bitmap=bitmap
+            button.configure(image=bitmap,compound='left')
             button.pack(fill='x')
-            glyph=tk.Label(button,text=icon,bd=0,font=('Microsoft YaHei UI',10))
-            glyph.place(x=30,rely=.5,anchor='center',width=20,height=22)
-            button.glyph=glyph
-            glyph.bind('<ButtonRelease-1>',lambda e,b=button:b.action())
-            glyph.bind('<Enter>',lambda e,b=button:b.event_generate('<Enter>'))
-            glyph.bind('<Leave>',lambda e,b=button:b.event_generate('<Leave>'))
-
         ttk.Label(self.rail,text='版本',style='Side.TLabel').pack(anchor='w',pady=(28,7))
         self.instance_view=tk.Canvas(self.rail,bd=0,highlightthickness=0,height=1)
         self.instance_view.pack(fill='both',expand=True)
@@ -77,6 +81,7 @@ class Workbench:
         ttk.Separator(self.home).pack(fill='x',pady=(12,22))
         ttk.Label(self.home,text='更新内容',style='Title.TLabel').pack(anchor='w')
         for release,lines in [
+            ('v18.6.1',('修复切换主题后主页和设置图标消失的问题。',)),
             ('v18.6',('主页集中展示更新记录。','点击左侧版本名称可查看模组、依赖和冲突。')),
             ('v18.5.6',('启动说明移到主窗口内，修复说明被遮挡时无法操作的问题。',)),
             ('v18.5.5',('调整窗口拖动定位，给说明卡片加上灰色轮廓。',)),
@@ -163,7 +168,8 @@ class Workbench:
         color='#%02x%02x%02x'%tuple(rgb)
         fg=inverse(color)
         b.configure(bg=color,fg=fg)
-        if hasattr(b,"glyph"):b.glyph.configure(bg=color,fg=fg)
+        if hasattr(b,"icon_bitmap"):
+            for x,y in b.icon_pixels:b.icon_bitmap.put(fg,(x,y))
 
     def palette(self,key,options,control):
         pop=tk.Toplevel(self.win)
