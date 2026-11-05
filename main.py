@@ -107,7 +107,8 @@ class App(Workbench):
             except Exception as e:
                 self.mods[p]=[]
                 self.reasons[p]='保留未识别文件：'+str(e)
-        self.location.config(text=f'{self.folder}    ·    Minecraft {self.version} / {self.loader.title()}')
+        self.version_title.configure(text=self.folder.parent.name)
+        self.location.config(text=f'{self.loader.title()}   ·   Minecraft {self.version}   ·   {len(self.disk)} 个模组文件')
         self.initial_off=set(self.off)
         self.refresh()
 
@@ -124,13 +125,15 @@ class App(Workbench):
         for dep,reqs in missing.items():
             for modname,rule in reqs:
                 missing_by_mod.setdefault(modname,[]).append(dep)
-        self.rows=list(self.mods)
-        for i,p in enumerate(self.rows):
+        self.row_data={}
+        self.missing_files=set()
+        for p in self.mods:
             details=[self.reasons.get(p,'Modrinth · 已校验')]
             lacking=[]
             for m in self.mods.get(p,[]):
                 lacking.extend(missing_by_mod.get(m.get('id'),[]))
             if lacking:
+                self.missing_files.add(p)
                 details.insert(0,'缺少前置：'+', '.join(sorted(set(lacking))))
             for pair,why in self.pairs.items():
                 if p in pair:
@@ -143,16 +146,51 @@ class App(Workbench):
             if p in self.swaps:
                 state='↻ 备份替换'
                 details.insert(0,'替换为 '+self.mods[self.swaps[p]][0]['version'])
-            self.tree.insert('','end',iid=str(i),values=(state,p.name,'；'.join(details)))
+            first=next(iter(self.mods[p]),{})
+            name=first.get('name') or first.get('id') or p.stem
+            self.row_data[p]=(state,name+'\n'+p.name,'；'.join(details))
+        self.render_rows(pairs)
+        result=extra.splitlines()[0] if extra else f'扫描完成 · {len(pairs)} 对冲突，缺少 {len(missing)} 个前置'
+        if extra.startswith('准备好 ') and self.proposed:
+            result='待应用：'+ '、'.join(self.mods[p][0]['id'] for p in sorted(self.proposed))
+        self.output_summary.configure(text=result)
         lines=[f'{a.name} ↔ {b.name}：'+ '；'.join(sorted(v)) for (a,b),v in pairs.items()]
         lines += [f'缺少 {key} ← '+', '.join(f'{n} {r}' for n,r in req) for key,req in missing.items()]
         append=getattr(self,'_log_append',False)
         self._log_append=False
         self.say('\n'.join(filter(None,[extra,*lines,*notes])) or '已识别的模组未发现声明冲突或缺失前置。',append=append)
 
+    def select_filter(self,key):
+        self.filter_key=key
+        if hasattr(self,'row_data'):
+            self.render_rows(self.visible_pairs)
+
+    def render_rows(self,pairs):
+        self.visible_pairs=pairs
+        self.tree.delete(*self.tree.get_children())
+        self.rows=[]
+        counts=(len(self.mods),len(pairs),len(self.missing_files))
+        for (key,button),text,count in zip(self.filters.items(),('全部','冲突','缺前置'),counts):
+            button.selected=self.filter_key==key
+            button.configure(text=f'{text} {count}'+(' 对' if key=='conflict' else ''))
+            self.tint(button,self.buttons[button][1])
+        def insert(path):
+            self.tree.insert('','end',iid=str(len(self.rows)),values=self.row_data[path])
+            self.rows.append(path)
+        grouped=set()
+        if self.filter_key!='missing':
+            for index,(pair,reasons) in enumerate(pairs.items(),1):
+                self.tree.insert('','end',iid=f'group{index}',values=('▏冲突',f'冲突 {index}','；'.join(sorted(reasons))),tags=('pair',))
+                for path in pair:insert(path)
+                grouped.update(pair)
+        if self.filter_key!='conflict':
+            for path in self.mods:
+                if path not in grouped and (self.filter_key=='all' or path in self.missing_files):
+                    insert(path)
+
     def toggle(self,event):
         row=self.tree.identify_row(event.y)
-        if self.busy or not row or self.tree.identify_region(event.x,event.y)!='cell':
+        if self.busy or not row.isdigit() or self.tree.identify_region(event.x,event.y)!='cell':
             return
         p=self.rows[int(row)]
         if not self.mods[p]:
@@ -206,6 +244,7 @@ class App(Workbench):
             self.refresh('没有缺失或可自动替换的前置。')
             return
         self.busy=True
+        self.output_summary.configure(text='正在查找兼容版本…')
         out=queue.Queue()
         progress=queue.Queue()
         self.say('正在查找并校验兼容版本，全部就绪后将自动安装。' if automatic else '正在查找前置，下载后可预览。')

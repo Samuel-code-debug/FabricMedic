@@ -68,6 +68,9 @@ class Workbench:
         self.drawer.pack(side='right',fill='y')
         self.drawer.pack_propagate(False)
         self.button(self.drawer,'输出     ×',self.toggle_drawer).pack(fill='x',padx=8,pady=12)
+        self.output_summary=ttk.Label(self.drawer,text='等待扫描',style='Side.TLabel',wraplength=245,justify='left',padding=(16,10))
+        self.output_summary.pack(fill='x')
+        ttk.Separator(self.drawer).pack(fill='x',padx=16)
         self.log=tk.Text(self.drawer,wrap='word',relief='flat',font=('Microsoft YaHei UI',10),padx=16,pady=12)
         self.log.pack(fill='both',expand=True)
         self.deck=ttk.Frame(self.workspace)
@@ -81,6 +84,7 @@ class Workbench:
         ttk.Separator(self.home).pack(fill='x',pady=(12,22))
         ttk.Label(self.home,text='更新内容',style='Title.TLabel').pack(anchor='w')
         for release,lines in [
+            ('v18.7',('工作台按冲突和缺失前置筛选，输出区单独显示处理结果。',)),
             ('v18.6.1',('修复切换主题后主页和设置图标消失的问题。',)),
             ('v18.6',('主页集中展示更新记录。','点击左侧版本名称可查看模组、依赖和冲突。')),
             ('v18.5.6',('启动说明移到主窗口内，修复说明被遮挡时无法操作的问题。',)),
@@ -91,17 +95,28 @@ class Workbench:
                 ttk.Label(self.home,text='•  '+line,wraplength=500).pack(anchor='w',pady=2)
         head=ttk.Frame(self.version_page)
         head.pack(fill='x')
-        ttk.Label(head,text='模组工作台',style='Title.TLabel').pack(side='left')
+        self.version_title=ttk.Label(head,text='模组工作台',style='Title.TLabel',cursor='hand2')
+        self.version_title.pack(side='left')
+        self.version_title.bind('<Button-1>',lambda e:self.dialog('实例路径',str(self.folder),mode='info') if self.folder else None)
         self.button(head,'◧   输出',self.toggle_drawer).pack(side='right')
         self.location=ttk.Label(self.version_page,text='从左下角操作面板添加第一个实例',style='Muted.TLabel',wraplength=560)
         self.location.pack(anchor='w',pady=(10,22))
+        ttk.Separator(self.version_page).pack(fill='x')
+        filters=ttk.Frame(self.version_page)
+        filters.pack(fill='x',pady=8)
+        self.filter_key='all'
+        self.filters={}
+        for key,text in [('all','全部'),('conflict','冲突'),('missing','缺前置')]:
+            button=self.button(filters,text,lambda k=key:self.select_filter(k))
+            button.pack(side='left',padx=(0,6))
+            self.filters[key]=button
         body=round_widget(ttk.Frame(self.version_page,style="Side.TFrame",padding=5),12)
         self.table_frame=body
         body.pack(fill='both',expand=True)
         inner=round_widget(ttk.Frame(body),9)
         inner.pack(fill='both',expand=True)
         self.tree=ttk.Treeview(inner,columns=('state','name','why'),show='headings',selectmode='browse')
-        for c,label,width in [('state','处理状态',96),('name','模组文件',280),('why','版本要求 / 冲突对象',340)]:
+        for c,label,width in [('state','处理状态',96),('name','模组 / 文件',270),('why','版本要求 / 冲突对象',340)]:
             self.tree.heading(c,text=label,anchor='w')
             self.tree.column(c,width=width,minwidth=80,stretch=c!='state')
         sx=Scrollbar(inner,orient='horizontal',command=self.tree.xview)
@@ -262,6 +277,8 @@ class Workbench:
         s.map('Treeview',background=[('selected',sel)],foreground=[('selected',accent)])
         s.map('TCombobox',fieldbackground=[('readonly',side)],foreground=[('readonly',fg)])
         self.instance_view.configure(bg=side)
+        self.tree.tag_configure('pair',foreground=accent,background=side)
+        s.configure('Treeview',rowheight=44)
         self.log.configure(bg=side,fg=inverse(side))
         for b,(_,amount) in self.buttons.items():
             self.tint(b,amount)
