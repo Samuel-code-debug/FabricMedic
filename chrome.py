@@ -130,7 +130,7 @@ def titlebar(app):
             app.persist()
             name.configure(text='◈   '+mode.title()+' Medic')
             if app.folder:app.safe(app.scan)
-            app.show_instance()
+            if app.page=="version":app.show_instance()
         for mode,details in [('fabric','Fabric 模组与依赖'),('forge','Forge 模组与依赖'),('mix','Forge 宿主 · Fabric 桥接')]:
             label=tk.Label(panel,text=mode.title()+('    ✓' if mode==app.loader else '')+'\n'+details,bg=sel if mode==app.loader else side,fg=fg,justify='left',anchor='w',width=21,padx=12,pady=6,cursor='hand2')
             label.pack(fill='x')

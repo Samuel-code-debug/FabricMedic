@@ -58,7 +58,7 @@ def transition(app, host, change, radial=False):
             g.DeleteObject(mask)
     app.ease(layer,draw,layer.destroy,motion='reveal')
 
-def transition_page(app,page,change):
+def transition_page(app,before,after,change):
     """Move live Tk controls. Never sample a partially repainted window."""
     host=app.deck
     cancel=getattr(app,'finish_page',None)
@@ -67,7 +67,6 @@ def transition_page(app,page,change):
     if app.prefs.get('speed')=='关闭' or not host.winfo_viewable():
         change()
         return
-    before,after=(app.home,app.settings) if page=='settings' else (app.settings,app.home)
     bg=app.colors[0]
     def tintable(rows):
         from tkinter import ttk

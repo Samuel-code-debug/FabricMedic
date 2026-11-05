@@ -74,7 +74,7 @@ class App(Workbench):
             self.folder=folder
             self.scan()
             self.remember()
-            self.navigate('home')
+            self.show_instance()
 
     def snapshot(self):
         return {p:(p.stat().st_size,p.stat().st_mtime_ns) for p in self.folder.glob('*.jar')}

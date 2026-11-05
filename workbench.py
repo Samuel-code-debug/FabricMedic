@@ -48,7 +48,7 @@ class Workbench:
             glyph.bind('<Enter>',lambda e,b=button:b.event_generate('<Enter>'))
             glyph.bind('<Leave>',lambda e,b=button:b.event_generate('<Leave>'))
 
-        ttk.Label(self.rail,text='版本实例',style='Side.TLabel').pack(anchor='w',pady=(28,7))
+        ttk.Label(self.rail,text='版本',style='Side.TLabel').pack(anchor='w',pady=(28,7))
         self.instance_view=tk.Canvas(self.rail,bd=0,highlightthickness=0,height=1)
         self.instance_view.pack(fill='both',expand=True)
         self.instances=ttk.Frame(self.instance_view,style='Side.TFrame')
@@ -63,21 +63,34 @@ class Workbench:
         self.drawer=ttk.Frame(self.workspace,width=0,style='Side.TFrame')
         self.drawer.pack(side='right',fill='y')
         self.drawer.pack_propagate(False)
-        self.button(self.drawer,'输出预览     ×',self.toggle_drawer).pack(fill='x',padx=8,pady=12)
+        self.button(self.drawer,'输出     ×',self.toggle_drawer).pack(fill='x',padx=8,pady=12)
         self.log=tk.Text(self.drawer,wrap='word',relief='flat',font=('Microsoft YaHei UI',10),padx=16,pady=12)
         self.log.pack(fill='both',expand=True)
         self.deck=ttk.Frame(self.workspace)
         self.deck.pack(fill='both',expand=True)
-        self.home=ttk.Frame(self.deck,padding=(18,18))
+        self.home=ttk.Frame(self.deck,padding=(32,26))
+        self.version_page=ttk.Frame(self.deck,padding=(18,18))
         self.settings=ttk.Frame(self.deck,padding=30)
+        self.pages={'home':self.home,'version':self.version_page,'settings':self.settings}
         self.home.place(relwidth=1,relheight=1)
-        head=ttk.Frame(self.home)
+        ttk.Label(self.home,text='Fabric Medic  /  更新记录',style='Muted.TLabel').pack(anchor='w')
+        ttk.Separator(self.home).pack(fill='x',pady=(12,22))
+        ttk.Label(self.home,text='更新内容',style='Title.TLabel').pack(anchor='w')
+        for release,lines in [
+            ('v18.6',('主页集中展示更新记录。','点击左侧版本名称可查看模组、依赖和冲突。')),
+            ('v18.5.6',('启动说明移到主窗口内，修复说明被遮挡时无法操作的问题。',)),
+            ('v18.5.5',('调整窗口拖动定位，给说明卡片加上灰色轮廓。',)),
+        ]:
+            ttk.Label(self.home,text=release,font=('Segoe UI',13,'bold')).pack(anchor='w',pady=(18,5))
+            for line in lines:
+                ttk.Label(self.home,text='•  '+line,wraplength=500).pack(anchor='w',pady=2)
+        head=ttk.Frame(self.version_page)
         head.pack(fill='x')
         ttk.Label(head,text='模组工作台',style='Title.TLabel').pack(side='left')
         self.button(head,'◧   输出',self.toggle_drawer).pack(side='right')
-        self.location=ttk.Label(self.home,text='从左下角操作面板添加第一个实例',style='Muted.TLabel',wraplength=560)
+        self.location=ttk.Label(self.version_page,text='从左下角操作面板添加第一个实例',style='Muted.TLabel',wraplength=560)
         self.location.pack(anchor='w',pady=(10,22))
-        body=round_widget(ttk.Frame(self.home,style="Side.TFrame",padding=5),12)
+        body=round_widget(ttk.Frame(self.version_page,style="Side.TFrame",padding=5),12)
         self.table_frame=body
         body.pack(fill='both',expand=True)
         inner=round_widget(ttk.Frame(body),9)
@@ -113,9 +126,6 @@ class Workbench:
             control.pack(anchor='w',ipadx=12)
         self.paint()
         self.list_instances()
-        saved=self.prefs.get('last')
-        if saved and Path(saved).is_dir() and saved in self.prefs.get('instances',{}):
-            self.win.after_idle(lambda:self.safe(lambda:self.activate(saved)))
         self.win.bind('<Escape>',lambda e:self.close_wheel() if self.wheel else None,add='+')
 
     def button(self,parent,text,cmd,caption=False,**options):
@@ -280,13 +290,15 @@ class Workbench:
         self.show_instance()
 
     def show_instance(self):
-        if self.page=='home' and self.home.winfo_viewable():
-            self.ease('instance',lambda t:self.home.place_configure(y=round(-16*(1-settle(t)))) if self.page=='home' else None,motion='page',seconds=.35)
-        else:self.navigate('home')
+        if self.page=='version' and self.version_page.winfo_viewable():
+            self.ease('instance',lambda t:self.version_page.place_configure(y=round(-16*(1-settle(t)))) if self.page=='version' else None,motion='page',seconds=.35)
+        else:self.navigate('version')
 
     def pick(self,path):
-        if not self.busy and self.folder!=Path(path):
-            self.safe(lambda:self.activate(path))
+        if self.busy:return
+        if self.folder==Path(path):
+            self.show_instance()
+        else:self.safe(lambda:self.activate(path))
 
     def ease(self,key,step,done=lambda:None,motion=None,seconds=None):
         if key in self.anim:
@@ -336,14 +348,15 @@ class Workbench:
         if finish:finish()
         if page==self.page:
             return
-        incoming=self.settings if page=='settings' else self.home
-        outgoing=self.home if page=='settings' else self.settings
+        incoming=self.pages[page]
+        outgoing=self.pages[self.page]
+        if page!='version' and self.drawer_open:self.toggle_drawer()
         self.page=page
         def change():
             outgoing.place_forget()
             incoming.place(x=0,y=0,relwidth=1,relheight=1)
             incoming.lift()
-        transition_page(self,page,change)
+        transition_page(self,outgoing,incoming,change)
 
     def toggle_drawer(self):
         self.drawer_open=not self.drawer_open
