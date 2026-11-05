@@ -1,5 +1,5 @@
-from motion import inverse, transition, transition_page, transition_refresh
-from chrome import round_widget, titlebar, Scrollbar
+from motion import inverse, transition, transition_page, settle
+from chrome import round_widget, round_window, titlebar, Scrollbar
 import math
 import os
 import json
@@ -20,7 +20,7 @@ class Workbench:
     def setup(self):
         self.pref=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'FabricMedic'/'workbench.json'
         try:
-            self.prefs=json.loads(self.pref.read_text(encoding='utf-8-sig'))
+            self.prefs=json.loads(self.pref.read_text(encoding='utf8'))
         except (OSError, ValueError):
             self.prefs={}
         self.anim={}
@@ -38,11 +38,24 @@ class Workbench:
         self.rail.pack(side='left',fill='y')
         self.rail.pack_propagate(False)
         ttk.Label(self.rail,text='工作空间',style='Side.TLabel').pack(anchor='w',pady=(0,12))
-        self.button(self.rail,'⌂    主页',lambda:self.navigate('home')).pack(fill='x')
-        self.button(self.rail,'⚙    设置',lambda:self.navigate('settings')).pack(fill='x')
+        for text,page,icon in [('主页','home','⌂'),('设置','settings','⚙')]:
+            button=self.button(self.rail,text,lambda p=page:self.navigate(p))
+            button.pack(fill='x')
+            glyph=tk.Label(button,text=icon,bd=0,font=('Microsoft YaHei UI',10))
+            glyph.place(x=30,rely=.5,anchor='center',width=20,height=22)
+            button.glyph=glyph
+            glyph.bind('<ButtonRelease-1>',lambda e,b=button:b.action())
+            glyph.bind('<Enter>',lambda e,b=button:b.event_generate('<Enter>'))
+            glyph.bind('<Leave>',lambda e,b=button:b.event_generate('<Leave>'))
+
         ttk.Label(self.rail,text='版本实例',style='Side.TLabel').pack(anchor='w',pady=(28,7))
-        self.instances=tk.Frame(self.rail,bg='#222222')
-        self.instances.pack(fill='both',expand=True,pady=(2,10))
+        self.instance_view=tk.Canvas(self.rail,bd=0,highlightthickness=0,height=1)
+        self.instance_view.pack(fill='both',expand=True)
+        self.instances=ttk.Frame(self.instance_view,style='Side.TFrame')
+        rows=self.instance_view.create_window(0,0,anchor='nw',window=self.instances)
+        self.instance_view.bind('<Configure>',lambda e:self.instance_view.itemconfigure(rows,width=e.width))
+        self.instances.bind('<Configure>',lambda e:self.instance_view.configure(scrollregion=(0,0,e.width,max(e.height,self.instance_view.winfo_height()))))
+        self.instance_view.bind('<MouseWheel>',self.scroll_instances)
         self.panel_button=self.button(self.rail,'☰    操作面板',self.open_wheel)
         self.panel_button.pack(fill='x',side='bottom',ipady=4)
         self.workspace=ttk.Frame(self.win)
@@ -50,7 +63,7 @@ class Workbench:
         self.drawer=ttk.Frame(self.workspace,width=0,style='Side.TFrame')
         self.drawer.pack(side='right',fill='y')
         self.drawer.pack_propagate(False)
-        self.button(self.drawer,'输出     ×',self.toggle_drawer).pack(fill='x',padx=8,pady=12)
+        self.button(self.drawer,'输出预览     ×',self.toggle_drawer).pack(fill='x',padx=8,pady=12)
         self.log=tk.Text(self.drawer,wrap='word',relief='flat',font=('Microsoft YaHei UI',10),padx=16,pady=12)
         self.log.pack(fill='both',expand=True)
         self.deck=ttk.Frame(self.workspace)
@@ -106,20 +119,15 @@ class Workbench:
         self.win.bind('<Escape>',lambda e:self.close_wheel() if self.wheel else None,add='+')
 
     def button(self,parent,text,cmd,caption=False,**options):
-        options.setdefault('padx',13)
-        options.setdefault('pady',6)
-        options.setdefault('font',('Microsoft YaHei UI',10))
         b=round_widget(tk.Label(parent,text=text,relief='flat',bd=0,highlightthickness=0,
-                                 cursor='hand2',takefocus=True,**options))
+                                 padx=13,pady=6,cursor='hand2',takefocus=True,
+                                 font=('Microsoft YaHei UI',10),**options))
         b.action=cmd
         b.bind('<ButtonRelease-1>',lambda e:b.action() if 0<=e.x<b.winfo_width() and 0<=e.y<b.winfo_height() else None)
         b.bind('<Return>',lambda e:b.action())
         b.bind('<space>',lambda e:b.action())
         self.buttons[b]=[caption,0.]
-        b.sticky=False
         def hover(target):
-            if getattr(b,'sticky',False):
-                target=max(target,1.0)
             start=self.buttons[b][1]
             self.ease(b,lambda t:self.tint(b,start+(target-start)*t),motion='hover_in' if target else 'hover_out')
         def cleanup(e):
@@ -138,10 +146,14 @@ class Workbench:
         self.buttons[b][1]=amount
         base=self.style.lookup('Cap.TFrame','background') if caption else self.colors[1]
         end='#459396' if caption else self.colors[2]
+        if getattr(b,"selected",False):
+            base,end=end,self.colors[4]
+            amount*=.28
         rgb=[round(int(base[i:i+2],16)*(1-amount)+int(end[i:i+2],16)*amount) for i in (1,3,5)]
         color='#%02x%02x%02x'%tuple(rgb)
         fg=inverse(color)
         b.configure(bg=color,fg=fg)
+        if hasattr(b,"glyph"):b.glyph.configure(bg=color,fg=fg)
 
     def palette(self,key,options,control):
         pop=tk.Toplevel(self.win)
@@ -233,8 +245,7 @@ class Workbench:
         s.configure('Treeview.Heading',background=side,foreground=muted,padding=7)
         s.map('Treeview',background=[('selected',sel)],foreground=[('selected',accent)])
         s.map('TCombobox',fieldbackground=[('readonly',side)],foreground=[('readonly',fg)])
-        self.instances.configure(bg=side)
-        self.list_instances()
+        self.instance_view.configure(bg=side)
         self.log.configure(bg=side,fg=inverse(side))
         for b,(_,amount) in self.buttons.items():
             self.tint(b,amount)
@@ -246,38 +257,36 @@ class Workbench:
         self.list_instances()
 
     def list_instances(self):
-        for w in list(self.instances.winfo_children()):
-            w.destroy()
-        self.instance_rows=[]
-        current=getattr(self,'folder',None)
-        for path,version in self.prefs.get('instances',{}).items():
-            name=Path(path).parent.name
-            row=self.button(self.instances,'  '+name,
-                            (lambda p=path:self.safe(lambda:self.activate(p))),caption=False)
-            row.pack(fill='x',pady=4,padx=(0,10))
-            if current is not None and str(current)==str(path):
-                row.sticky=True
-                self.tint(row,1)
-            else:
-                row.sticky=False
-            self.instance_rows.append(row)
+        for row in self.instances.winfo_children():
+            row.destroy()
+        for path in self.prefs.get('instances',{}):
+            row=self.button(self.instances,Path(path).parent.name,lambda p=path:self.pick(p),anchor='w')
+            row.selected=path==self.prefs.get('last')
+            self.tint(row,0)
+            row.pack(fill='x',padx=2,pady=3)
+            row.bind('<MouseWheel>',self.scroll_instances)
+
+    def scroll_instances(self,event):
+        if self.instances.winfo_height()>self.instance_view.winfo_height():
+            self.instance_view.yview_scroll(-1 if event.delta>0 else 1,'units')
 
     def activate(self,path):
         if not Path(path).is_dir():
             raise ValueError('实例目录已移动，请从操作面板重新选择。')
-        def change():
-            self.folder=Path(path)
-            self.game.set(self.prefs['instances'][path])
-            self.scan()
-            self.remember()
-        if getattr(self,'page',None)=='home':
-            transition_refresh(self,self.home,change)
-        else:
-            change()
-            self.navigate('home')
+        self.folder=Path(path)
+        self.game.set(self.prefs['instances'][path])
+        self.scan()
+        self.remember()
+        self.show_instance()
 
-    def pick(self,event):
-        return
+    def show_instance(self):
+        if self.page=='home' and self.home.winfo_viewable():
+            self.ease('instance',lambda t:self.home.place_configure(y=round(-16*(1-settle(t)))) if self.page=='home' else None,motion='page',seconds=.35)
+        else:self.navigate('home')
+
+    def pick(self,path):
+        if not self.busy and self.folder!=Path(path):
+            self.safe(lambda:self.activate(path))
 
     def ease(self,key,step,done=lambda:None,motion=None,seconds=None):
         if key in self.anim:
@@ -304,8 +313,27 @@ class Workbench:
                 done()
         tick()
 
+    def show_notice(self):
+        notice=getattr(self,'notice',None)
+        if notice is not None and notice.winfo_exists():
+            notice.lift()
+            return
+        notice=self.notice=round_widget(tk.Frame(self.win,bg='#777777'),12)
+        shell=round_widget(ttk.Frame(notice,padding=22),11)
+        shell.pack(fill='both',expand=True,padx=1,pady=1)
+        ttk.Label(shell,text='说明',style='Title.TLabel').pack(anchor='w')
+        ttk.Label(shell,text='修复了一些已知的问题。').pack(anchor='w',pady=14)
+        button=self.button(shell,'确定',notice.destroy)
+        button.pack(anchor='e')
+        button.bind('<Escape>',lambda e:notice.destroy())
+        notice.place(relx=.5,rely=.5,anchor='center')
+        notice.lift()
+        button.focus_set()
+
     def navigate(self,page):
         self.close_wheel()
+        finish=getattr(self,'finish_page',None)
+        if finish:finish()
         if page==self.page:
             return
         incoming=self.settings if page=='settings' else self.home
@@ -328,47 +356,49 @@ class Workbench:
             self.close_wheel()
             return
         panel=self.wheel=round_widget(ttk.Frame(self.rail,style='Side.TFrame',padding=6),10)
-        actions=[('选择目录',self.choose),('重新扫描',self.scan),('修复依赖',self.download),
-                 ('应用方案',self.commit),('自动安装并校验',self.auto_install),('恢复备份',self.undo)]
+        actions=[('选择目录',self.choose),('重新扫描',self.scan),('修复依赖',self.download),('应用方案',self.commit),('自动安装并校验',self.auto_install),('恢复备份',self.undo)]
+        stack=ttk.Frame(panel,style='Side.TFrame')
         for text,cmd in actions:
-            self.button(panel,text,lambda f=cmd:self.close_wheel(lambda:self.safe(f))).pack(fill='x',pady=1)
-        panel.update_idletasks()
-        full=max(1,panel.winfo_reqheight())
-        # 和其它几处同一套：三次缓出，从按钮上沿往上展开
-        def frame(clock):
-            grow=1-(1-clock)**3
-            panel.place(in_=self.panel_button,relwidth=1,rely=0,
-                        y=round(-6-10*grow),anchor='sw',
-                        height=max(1,round(full*grow)))
-            panel.lift()
-        self.ease('wheel',frame,motion='page',seconds=0.22)
+            self.button(stack,text,lambda f=cmd:self.close_wheel(lambda:self.safe(f))).pack(fill='x',pady=1)
+        stack.update_idletasks()
+        height=stack.winfo_reqheight()
+        stack.place(relx=0,rely=1,anchor='sw',relwidth=1,height=height)
+        panel.place(in_=self.panel_button,relwidth=1,y=-6,anchor='sw',height=height+12)
+        panel.lift()
+        panel.opacity=0
+        def fade(amount):
+            panel.opacity=amount
+            surface=self.colors[1]
+            for row in stack.winfo_children():
+                self.tint(row,self.buttons[row][1])
+                ink=row.cget('fg')
+                rgb=tuple(round(int(surface[i:i+2],16)*(1-amount)+int(ink[i:i+2],16)*amount) for i in (1,3,5))
+                row.configure(fg='#%02x%02x%02x'%rgb)
+        panel.fade=fade
+        self.ease('wheel',fade,motion='window',seconds=.19)
 
     def close_wheel(self,done=lambda:None):
-        if not self.wheel:
-            done()
-            return
-        panel=self.wheel
-        self.wheel=None
-        height=max(1,panel.winfo_height())
-        def frame(clock):
-            grow=1-(1-clock)**3
-            if panel.winfo_exists():
-                panel.place_configure(height=max(1,round(height*(1-grow))),
-                                      y=round(-6-10*(1-grow)))
-        def closed():
-            if panel.winfo_exists():
+        if self.wheel:
+            panel=self.wheel
+            start=panel.opacity
+            def closed():
                 panel.destroy()
-            done()
-        self.ease('wheel',frame,closed,motion='page',seconds=0.18)
+                self.wheel=None
+                done()
+            self.ease('wheel',lambda t:panel.fade(start*(1-t)),closed,motion='window',seconds=.16)
 
     def dialog(self,title,text,mode='confirm',initialvalue=''):
         pop=tk.Toplevel(self.win)
         pop.withdraw()
         pop.title(title)
+        pop.overrideredirect(True)
+        round_window(pop,12)
         pop.transient(self.win)
         pop.attributes('-alpha',0)
+        pop.configure(bg='#777777')
         shell=ttk.Frame(pop,padding=22)
-        shell.pack(fill='both',expand=True)
+        round_widget(shell,11)
+        shell.pack(fill='both',expand=True,padx=1,pady=1)
         ttk.Label(shell,text=title,style='Title.TLabel').pack(anchor='w')
         if len(text)>400:
             view=tk.Text(shell,height=12,width=60,wrap='word',bg=self.colors[0],fg=self.colors[3],relief='flat')
@@ -385,7 +415,11 @@ class Workbench:
         bar=ttk.Frame(shell)
         bar.pack(anchor='e',pady=(14,0))
         result=[None]
+        closing=False
         def close(value):
+            nonlocal closing
+            if closing:return
+            closing=True
             result[0]=value
             initial=pop.attributes('-alpha')
             self.ease('dialog',lambda t:pop.attributes('-alpha',float(initial)*(1-t)),pop.destroy)

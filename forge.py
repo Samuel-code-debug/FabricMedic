@@ -40,6 +40,7 @@ def read(source,depth=0,budget=None):
                 found=re.search(r'(?im)^Implementation-Version: ([^\r\n]+)',load('META-INF/MANIFEST.MF').decode('utf8','replace'))
                 if found:version=found[1]
             m=dict(id=key,version=version,depends={},breaks={},conflicts={})
+            m['provides']=entry.get('provides',[])
             for d in doc.get('dependencies',{}).get(key,[]):
                 target=d['modId']
                 if target=='forge' or d.get('side')=='SERVER':continue

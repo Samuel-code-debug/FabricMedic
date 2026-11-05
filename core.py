@@ -12,6 +12,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 
@@ -54,6 +55,22 @@ def matches(version, rule):
 
 
 def metadata(source,loader='fabric'):
+    if loader=='mix':
+        with zipfile.ZipFile(source) as jar:
+            names=set(jar.namelist())
+            if 'META-INF/mods.toml' in names:
+                return metadata(source,'forge')
+            if 'META-INF/MANIFEST.MF' in names and 'META-INF/services/cpw.mods.modlauncher.api.ITransformationService' in names:
+                manifest=jar.read('META-INF/MANIFEST.MF').decode('utf8','replace').replace('\r\n ','')
+                fields=dict(line.split(': ',1) for line in manifest.splitlines() if ': ' in line)
+                if fields.get('Automatic-Module-Name')=='org.sinytra.connector':
+                    return [dict(id='connector',provides=['connectormod'],version=fields.get('Implementation-Version','?'),depends={'fabric_api':'*'})]
+        mods=metadata(source,'fabric')
+        if mods:
+            mods[0].setdefault('depends',{}).setdefault('connector','*')
+            if mods[0]['id']=='fabric-api':
+                mods[0].setdefault('breaks',{})['fabric_api']='*'
+        return mods
     if loader=='forge':
         from forge import read
         return read(source)
@@ -183,10 +200,22 @@ def cached_jar(file):
 _list_cache={}
 
 
-def resolve(target, requirements, game, folder, accept=None, loader='fabric'):
+def resolve(target, requirements, game, folder, accept=None, loader='fabric', project=None, file_loader=None):
+    if loader=='mix':
+        bridge={'connector':'connector','connectormod':'connector','fabric_api':'forgified-fabric-api','fabric-api':'forgified-fabric-api','fabric':'forgified-fabric-api'}
+        errors=[]
+        for platform in (('forge',) if target in bridge else ('forge','fabric')):
+            try:
+                return resolve(target,requirements,game,folder,accept,platform,bridge.get(target),'mix')
+            except ValueError as exc:
+                errors.append(str(exc))
+            except HTTPError as exc:
+                if exc.code!=404:raise
+                errors.append(str(exc))
+        raise ValueError('没有找到兼容桥接组合的 '+target+'：'+' / '.join(errors))
     aliases={'cloth-config':'cloth-config','cloth_config':'cloth-config','fabric':'fabric-api',
              'fabric-api':'fabric-api','mezz_config':'mezzconfig','fabric-language-kotlin':'fabric-language-kotlin'}
-    slug=aliases.get(target,target.replace('_','-'))
+    slug=project or aliases.get(target,target.replace('_','-'))
     query=urlencode({'loaders':json.dumps([loader]), 'game_versions':json.dumps([game])})
     url='https://api.modrinth.com/v2/project/'+quote(slug,safe='')+'/version?'+query
     stamp,versions=_list_cache.get(url,(0,None))
@@ -215,7 +244,7 @@ def resolve(target, requirements, game, folder, accept=None, loader='fabric'):
             jobs=[pool.submit(cached_jar,f) for _,f in batch]
             for (v,_),job in zip(batch,jobs):
                 data=job.result()
-                mods=metadata(io.BytesIO(data),loader)
+                mods=metadata(io.BytesIO(data),file_loader or loader)
                 if accept and not accept(mods):
                     continue
                 if any(target in ids(m) and all(matches(m['version'],r) is True for r in rules) for m in mods):

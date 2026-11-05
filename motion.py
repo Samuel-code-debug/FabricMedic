@@ -25,7 +25,6 @@ def transition(app, host, change, radial=False):
     x,y=host.winfo_rootx()-rect.left,host.winfo_rooty()-rect.top
     w,h=host.winfo_width(),host.winfo_height()
     old=snap.crop((x,y,x+w,y+h))
-    change()
     layer=tk.Canvas(host,bd=0,highlightthickness=0)
     layer.place(x=0,y=0,width=w,height=h)
     layer.tk.call('raise',layer._w)
@@ -33,6 +32,8 @@ def transition(app, host, change, radial=False):
     layer.photo=photo
     layer.create_image(0,0,anchor='nw',image=photo)
     layer.update_idletasks()
+    ctypes.windll.gdi32.GdiFlush()
+    change()
     handle=wintypes.HWND(layer.winfo_id())
     g=ctypes.windll.gdi32
     g.CreateRectRgn.restype=g.CreateEllipticRgn.restype=wintypes.HANDLE
@@ -132,21 +133,7 @@ def transition_page(app,page,change):
             colorize(colors,[1-unit((ms-i*10)/70) for i in range(len(rows))])
     app.ease('page_live',frame,finish,motion='page',seconds=total/1000)
 
-def transition_refresh(app, host, change):
-    """实例切换用：内容先上移，再按同一套弹簧曲线落回原位。
-
-    和 transition_page 用的是同一个位移公式，只是不换页。
-    """
-    if app.prefs.get('speed')=='关闭' or not host.winfo_viewable():
-        change()
-        return
-    change()
-    total=420
-    unit=lambda n:max(0.0,min(1.0,n))
-    def frame(clock):
-        age=clock*total
-        q=unit(age/350)
-        dy=-5*(1-unit(age/250))**3-11*(1-q)**1.5*math.cos(1.5*math.pi*q)
-        host.place_configure(y=round(dy))
-    app.ease('refresh',frame,motion='page',seconds=total/1000)
-
+def settle(t):
+    """Page entrance displacement, normalized to travel from zero to one."""
+    age=t*350
+    return 1-(5*max(0,1-age/250)**3+11*(1-t)**1.5*math.cos(1.5*math.pi*t))/16

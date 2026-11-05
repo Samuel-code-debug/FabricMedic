@@ -20,7 +20,7 @@ Windows 上的 Minecraft 模组体检工具。选中一个实例的 `mods` 文�
 
 ## 下载与运行
 
-到 [Releases](../../releases) 下载最新的 `FabricMedic-v18.5.5.zip`，解压，双击 `FabricMedic-v18.5.5.exe`。
+到 [Releases](../../releases) 下载最新的 `FabricMedic-v18.5.6.zip`，解压，双击 `FabricMedic-v18.5.6.exe`。
 
 - 免安装，不写注册表，不放后台服务
 - 配置存在 `%LOCALAPPDATA%\FabricMedic\workbench.json`
@@ -129,7 +129,7 @@ python main.py
 ## 从源码构建
 
 ```
-python -m PyInstaller FabricMedic-v18.5.5.spec --noconfirm --distpath dist --workpath build
+python -m PyInstaller --onefile --windowed --name FabricMedic-v18.5.6 main.py --noconfirm --distpath dist --workpath build
 ```
 
 需要先 `pip install pyinstaller`。产物在 `dist\`。

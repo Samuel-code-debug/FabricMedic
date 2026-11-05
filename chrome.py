@@ -1,10 +1,10 @@
 """Window chrome and rounded Win32 child regions for the desktop workbench."""
 import ctypes
-import math
 from ctypes import wintypes
 import os
 import tkinter as tk
 from tkinter import ttk
+from motion import settle
 
 
 def round_widget(widget, radius=9, circle=False):
@@ -25,9 +25,51 @@ def round_widget(widget, radius=9, circle=False):
     return widget
 
 
+def round_window(window, radius=14):
+    """Apply clipping after Tk has finished mapping or resizing its wrapper."""
+    pending=[None]
+    previous=[None]
+    user=ctypes.windll.user32
+    gdi=ctypes.windll.gdi32
+    gdi.CreateRoundRectRgn.argtypes=[ctypes.c_int]*6
+    gdi.CreateRoundRectRgn.restype=wintypes.HANDLE
+    user.SetWindowRgn.argtypes=[wintypes.HWND,wintypes.HANDLE,wintypes.BOOL]
+    user.SetWindowRgn.restype=ctypes.c_int
+    gdi.DeleteObject.argtypes=[wintypes.HANDLE]
+    def apply_shape():
+        pending[0]=None
+        if not window.winfo_exists() or not window.winfo_ismapped():
+            return
+        handle=wintypes.HWND(int(window.frame(),0))
+        rect=wintypes.RECT()
+        if not user.GetWindowRect(handle,ctypes.byref(rect)):
+            return
+        width,height=rect.right-rect.left,rect.bottom-rect.top
+        geometry=(handle.value,width,height)
+        if width<2 or height<2 or previous[0]==geometry:
+            return
+        region=gdi.CreateRoundRectRgn(0,0,width+1,height+1,radius*2,radius*2)
+        if not region:return
+        previous[0]=geometry
+        if not user.SetWindowRgn(handle,region,True):
+            previous[0]=None
+            gdi.DeleteObject(region)
+    def schedule(event):
+        if event.widget is window and pending[0] is None:
+            pending[0]=window.after(16,apply_shape)
+    def cancel(event):
+        if event.widget is window and pending[0] is not None:
+            window.after_cancel(pending[0])
+            pending[0]=None
+    window.bind('<Configure>',schedule,add='+')
+    window.bind('<Map>',schedule,add='+')
+    window.bind('<Destroy>',cancel,add='+')
+
+
 def titlebar(app):
     win=app.win
     win.overrideredirect(True)
+    round_window(win)
     user=ctypes.windll.user32
     def handle():
         return wintypes.HWND(int(win.frame(),0))
@@ -36,7 +78,13 @@ def titlebar(app):
         if app.busy:return app.dialog('正在修复','请等待当前操作结束后再关闭。','error')
         app.closing=True
         alpha=float(win.attributes('-alpha'))
-        app.ease('window',lambda t:win.attributes('-alpha',alpha*(1-t)),win.destroy,seconds=.18,motion='window')
+        def finish_close():
+            for job in list(app.anim.values()):
+                win.after_cancel(job)
+            app.anim.clear()
+            win.quit()
+            win.destroy()
+        app.ease('window',lambda t:win.attributes('-alpha',alpha*(1-t)),finish_close,seconds=.18,motion='window')
     win.protocol('WM_DELETE_WINDOW',close)
     def minimize():
         user.ShowWindow(handle(),6)
@@ -44,41 +92,17 @@ def titlebar(app):
     bar.pack(fill='x')
     name=ttk.Label(bar,text='◈   Fabric Medic',style='Cap.TLabel')
     app.logo=name
-    name.pack(side='left',padx=(0,2))
-    arrow=tk.Canvas(bar,width=32,height=30,highlightthickness=0,bd=0,cursor='hand2')
+    name.pack(side='left')
+    arrow=tk.Canvas(bar,width=34,height=32,highlightthickness=0,bd=0,cursor='hand2')
     arrow.pack(side='left',padx=(0,12))
-    arrow.create_line(8,12,16,19,24,12,width=2,tags='chevron')
+    arrow.create_line(9,13,17,20,25,13,width=3,tags='chevron')
     app.loader_arrow=arrow
-    app.loader_arrow_angle=0.0
-
-    def draw_chevron(deg):
-        # 和 PCL 一样：绕自身中心旋转，0° 朝下，180° 朝上
-        cx,cy=16.0,15.0
-        a=math.radians(deg)
-        ca,sa=math.cos(a),math.sin(a)
-        pts=[]
-        for px,py in ((8,12),(16,19),(24,12)):
-            dx,dy=px-cx,py-cy
-            pts.extend((cx+dx*ca-dy*sa, cy+dx*sa+dy*ca))
-        arrow.coords('chevron',*pts)
-
-    def spin(to,done=None):
-        start=app.loader_arrow_angle
-        def step(t):
-            app.loader_arrow_angle=start+(to-start)*t
-            draw_chevron(app.loader_arrow_angle)
-        app.ease('loader_arrow',step,done or (lambda:None),motion='page',seconds=0.2)
     popup=None
 
     def dismiss(event=None):
         nonlocal popup
         if popup is not None:
-            job=app.anim.pop('loader_menu',None)
-            if job:
-                try:app.win.after_cancel(job)
-                except Exception:pass
-            try:popup.destroy()
-            except Exception:pass
+            popup.destroy()
             popup=None
 
     def outside(event):
@@ -94,26 +118,8 @@ def titlebar(app):
             return
         if app.busy:return
         bg,side,sel,fg,muted,accent=app.colors
-
-        # 用独立窗口 + 透明色，才能有真正的圆角（子控件裁不了）
-        KEY='#010203'
-        W,ROW,PAD=214,46,7
-        rows_def=[('fabric','Fabric 模组与依赖'),('forge','Forge 模组与依赖')]
-        H=PAD*2+ROW*len(rows_def)
-
-        pop=tk.Toplevel(win)
-        pop.overrideredirect(True)
-        pop.transient(win)
-        pop.configure(bg=KEY)
-        try:
-            pop.attributes('-transparentcolor',KEY)
-        except Exception:
-            pop.configure(bg=side)
-        canvas=tk.Canvas(pop,width=W,height=H,bg=KEY,highlightthickness=0,bd=0)
-        canvas.pack()
-        popup=canvas
-        app.loader_menu_panel=canvas
-
+        panel=tk.Frame(win,bg=side,padx=8,pady=7)
+        popup=panel
         def choose(mode):
             if mode!=app.loader and (getattr(app,'proposed',set()) or getattr(app,'off',set())!=getattr(app,'initial_off',set())):
                 dismiss()
@@ -123,78 +129,42 @@ def titlebar(app):
             app.prefs['loader']=mode
             app.persist()
             name.configure(text='◈   '+mode.title()+' Medic')
-            app.safe(app.scan)
-
-        def rounded(x0,y0,x1,y1,r,fill,tags=''):
-            canvas.create_arc(x0,y0,x0+2*r,y0+2*r,start=90,extent=90,fill=fill,outline=fill,tags=tags)
-            canvas.create_arc(x1-2*r,y0,x1,y0+2*r,start=0,extent=90,fill=fill,outline=fill,tags=tags)
-            canvas.create_arc(x0,y1-2*r,x0+2*r,y1,start=180,extent=90,fill=fill,outline=fill,tags=tags)
-            canvas.create_arc(x1-2*r,y1-2*r,x1,y1,start=270,extent=90,fill=fill,outline=fill,tags=tags)
-            canvas.create_rectangle(x0+r,y0,x1-r,y1,fill=fill,outline=fill,tags=tags)
-            canvas.create_rectangle(x0,y0+r,x1,y1-r,fill=fill,outline=fill,tags=tags)
-
-        hot=[None]
-        def paint(hover=None):
-            canvas.delete('all')
-            rounded(0,0,W-1,H-1,10,side,'bg')
-            for i,(mode,details) in enumerate(rows_def):
-                y=PAD+i*ROW
-                tag='row%d'%i
-                if mode==app.loader or hover==i:
-                    rounded(4,y,W-5,y+ROW-2,7,sel if mode==app.loader else '#2a3745',tag)
-                canvas.create_text(14,y+13,text=mode.title(),anchor='w',
-                                   fill=fg,font=('Microsoft YaHei UI',10,'bold'),tags=tag)
-                canvas.create_text(14,y+30,text=details,anchor='w',
-                                   fill=muted,font=('Microsoft YaHei UI',8),tags=tag)
-                if mode==app.loader:
-                    canvas.create_text(W-18,y+20,text='✓',anchor='e',
-                                       fill=accent,font=('Microsoft YaHei UI',11),tags=tag)
-                canvas.tag_bind(tag,'<Button-1>',lambda e,m=mode:choose(m))
-
-        def on_motion(e):
-            # 只在行号变化时重绘，避免 Enter/Leave 造成的重绘死循环
-            idx=None
-            if PAD<=e.y<PAD+ROW*len(rows_def):
-                idx=min(len(rows_def)-1,(e.y-PAD)//ROW)
-            if idx!=hot[0]:
-                hot[0]=idx
-                paint(idx)
-
-        canvas.bind('<Motion>',on_motion)
-        canvas.bind('<Leave>',lambda e:paint(None) if hot[0] is not None else None)
-        paint()
-
-        x=name.winfo_rootx()
-        y=bar.winfo_rooty()+bar.winfo_height()+3
-        pop.geometry('%dx%d+%d+%d'%(W,H,x,y))
-        pop.lift()
-
-        # 和实例切换、页面切换同一套弹簧
-        unit=lambda n:max(0.0,min(1.0,n))
-        total=420
-        def frame(clock):
-            if popup is not canvas:
-                return
-            age=clock*total
-            q=unit(age/350)
-            dy=-5*(1-unit(age/250))**3-11*(1-q)**1.5*math.cos(1.5*math.pi*q)
-            pop.geometry('%dx%d+%d+%d'%(W,H,x,round(y+dy)))
-        app.ease('loader_menu',frame,motion='page',seconds=total/1000)
-
+            if app.folder:app.safe(app.scan)
+            app.show_instance()
+        for mode,details in [('fabric','Fabric 模组与依赖'),('forge','Forge 模组与依赖'),('mix','Forge 宿主 · Fabric 桥接')]:
+            label=tk.Label(panel,text=mode.title()+('    ✓' if mode==app.loader else '')+'\n'+details,bg=sel if mode==app.loader else side,fg=fg,justify='left',anchor='w',width=21,padx=12,pady=6,cursor='hand2')
+            label.pack(fill='x')
+            label.bind('<ButtonRelease-1>',lambda e,m=mode:choose(m))
+        x=name.winfo_rootx()-win.winfo_rootx()
+        y=bar.winfo_y()+bar.winfo_height()+3
+        panel.place(x=x,y=y-6)
+        panel.lift()
+        app.ease('loader_menu',lambda t:panel.place_configure(y=round(y-12*(1-settle(t)))) if popup is panel else None,motion='page',seconds=.35)
     name.configure(text='◈   '+app.loader.title()+' Medic',cursor='hand2')
     for target in (name,arrow):
         target.bind('<Button-1>',menu)
-    def drag(e):
-        if os.name=='nt' and not user.IsZoomed(handle()) and not edge(e):
-            user.ReleaseCapture()
-            user.SendMessageW(wintypes.HWND(int(win.frame(),0)),0xA1,2,0)
-    for w in (bar,):
-        w.bind('<ButtonPress-1>',drag)
-    for title,cmd in [('工作台',lambda:app.navigate('home')),('设置',lambda:app.navigate('settings')),('输出',app.toggle_drawer)]:
-        app.button(bar,title,cmd,caption=True).pack(side='left',padx=3)
-    for title,cmd in [('×',close),('－',minimize)]:
-        app.button(bar,title,cmd,caption=True,width=4,padx=18,pady=9,
-                   font=('Microsoft YaHei UI',11)).pack(side='right',padx=2)
+    def maximize():
+        user.ShowWindow(handle(),9 if user.IsZoomed(handle()) else 3)
+    movement={}
+    def begin_move(event):
+        if not user.IsZoomed(handle()) and not edge(event):
+            cursor=wintypes.POINT()
+            bounds=wintypes.RECT()
+            if user.GetCursorPos(ctypes.byref(cursor)) and user.GetWindowRect(handle(),ctypes.byref(bounds)):
+                movement.update(dx=cursor.x-bounds.left,dy=cursor.y-bounds.top)
+    def move_window(event):
+        if movement:
+            cursor=wintypes.POINT()
+            if user.GetCursorPos(ctypes.byref(cursor)):
+                user.SetWindowPos(handle(),None,cursor.x-movement['dx'],cursor.y-movement['dy'],0,0,0x0015)
+    bar.bind('<ButtonPress-1>',begin_move)
+    bar.bind('<B1-Motion>',move_window)
+    bar.bind('<ButtonRelease-1>',lambda e:movement.clear())
+    app.button(bar,'说明',app.show_notice,caption=True).pack(side='left',padx=3)
+    for title,cmd in [('×',close),('−',minimize)]:
+        button=app.button(bar,title,cmd,caption=True)
+        button.configure(font=('Segoe UI',19),width=2,padx=6,pady=0)
+        button.pack(side='right',padx=1)
     def taskbar():
         hwnd=handle()
         ex=user.GetWindowLongW(hwnd,-20)

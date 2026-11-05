@@ -209,7 +209,7 @@ class App(Workbench):
         out=queue.Queue()
         progress=queue.Queue()
         self.say('正在查找并校验兼容版本，全部就绪后将自动安装。' if automatic else '正在查找前置，下载后可预览。')
-        resolver=resolve if self.loader=="fabric" else lambda *args,**kw:resolve(*args,**kw,loader="forge")
+        resolver=lambda *args,**kw:resolve(*args,**kw,loader=self.loader)
         def worker():
             found={}
             errors=[]
@@ -240,19 +240,31 @@ class App(Workbench):
                             else:
                                 p,mods=resolver(k,rules,self.version,Path(self.temp.name))
                         except ValueError as reason:
-                            if not automatic or not old or k in wrong_game or '没有找到' not in str(reason):
+                            if k in wrong_game or '没有找到' not in str(reason):
                                 raise
-                            owners=[f for f,group in live.items() if any(k in m.get('depends',{}) and matches(live[old][0]['version'],m['depends'][k]) is False for m in group)]
-                            if len(owners)!=1 or owners[0] not in self.disk:
+                            owners=[f for f,group in live.items() if any(k in m.get('depends',{}) for m in group)]
+                            if len(owners)!=1 or owners[0] not in self.disk or owners[0] in swaps:
                                 raise
-                            installed=live[old][0]['version']
+                            installed=live[old][0]['version'] if old else None
                             old=owners[0]
                             dep=k
                             k=live[old][0]['id']
                             requires=[(m['id'],m['depends'][k]) for group in live.values() for m in group if k in m.get('depends',{})]
+                            progress.put('前置无匹配版本，正在查找兼容的 '+k+' 版本 …')
                             def compatible(group):
-                                return game_ok(group) and all(matches(installed,m['depends'][dep]) is True for m in group if dep in m.get('depends',{}))
+                                if not game_ok(group):return False
+                                dependency_rules=[(m['id'],m['depends'][dep]) for m in group if dep in m.get('depends',{})]
+                                if not dependency_rules:return True
+                                if installed is not None:
+                                    return all(matches(installed,rule) is True for _,rule in dependency_rules)
+                                try:
+                                    resolver(dep,dependency_rules,self.version,Path(self.temp.name),accept=game_ok)
+                                    return True
+                                except ValueError:
+                                    return False
                             p,mods=resolver(k,requires,self.version,Path(self.temp.name),accept=compatible)
+                            tried.discard(dep)
+                            progress.put('兼容方案：替换 '+k+' '+live[old][0]['version']+' → '+mods[0]['version'])
                         if (not automatic and p in self.off) or any(f.name==p.name for f in self.disk):
                             raise ValueError('同名文件已存在或已手动取消')
                         if old:
@@ -384,5 +396,5 @@ if __name__=='__main__':
         height=min(720,r.bottom-r.top)
         win.geometry(f'{width}x{height}+{r.left+(r.right-r.left-width)//2}+{r.top+(r.bottom-r.top-height)//2}')
     win.update_idletasks()
-    win.after_idle(lambda:app.ease('window',lambda t:win.attributes('-alpha',max(0,(t-.28)/.72)),motion='window',seconds=.35))
+    win.after_idle(lambda:app.ease('window',lambda t:win.attributes('-alpha',max(0,(t-.28)/.72)),done=lambda:win.after_idle(app.show_notice),motion='window',seconds=.35))
     win.mainloop()
