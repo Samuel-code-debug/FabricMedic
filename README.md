@@ -20,7 +20,7 @@ Windows 上的 Minecraft 模组体检工具。选中一个实例的 `mods` 文�
 
 ## 下载与运行
 
-到 [Releases](../../releases) 下载最新的 `FabricMedic-v18.7.1.zip`，解压，双击 `FabricMedic-v18.7.1.exe`。
+到 [Releases](../../releases) 下载最新的 `FabricMedic-v2.zip`，解压，双击 `FabricMedic-v2.exe`。
 
 - 免安装，不写注册表，不放后台服务
 - 配置存在 `%LOCALAPPDATA%\FabricMedic\workbench.json`
@@ -39,11 +39,11 @@ python main.py
 
 ### 1. 选实例
 
-点左下角 **操作面板 → 选择目录**，选中实例里的 `mods` 文件夹（文件夹名必须是 `mods`）。
+主页点击 **查找我的游戏版本**，从左侧选择一个版本即可扫描。找不到时点击 **手动添加版本**，选择版本目录或 `mods` 文件夹。
 
 工具会自己从同级的实例 json 里读游戏版本；读不到会弹框让你手填。
 
-选过的实例会留在左侧「版本实例」里，下次点一下就能切回来。
+选过的实例会留在左侧「版本」里，下次点一下就能切回来。
 
 ### 2. 扫描
 
@@ -68,7 +68,7 @@ python main.py
 
 ### 4. 修复依赖
 
-点 **操作面板 → 修复依赖**，它会去 Modrinth 找匹配当前游戏版本和加载器的文件。
+版本页点击 **生成修复方案**，它会去 Modrinth 找匹配当前游戏版本和加载器的文件；确认列表后点击 **确认应用方案**。
 
 查找过程实时显示在右侧「输出」面板里，最后一行是结果。找到的文件先以「＋ 待安装」出现，**不会直接写入**。
 
@@ -129,7 +129,7 @@ python main.py
 ## 从源码构建
 
 ```
-python -m PyInstaller --onefile --windowed --name FabricMedic-v18.7.1 main.py --noconfirm --distpath dist --workpath build
+python -m PyInstaller --onefile --windowed --name FabricMedic-v2 main.py --noconfirm --distpath dist --workpath build
 ```
 
 需要先 `pip install pyinstaller`。产物在 `dist\`。
@@ -152,3 +152,9 @@ motion.py      页面与内容切换动效
 ## 许可
 
 MIT
+
+## v2 更新
+
+新版统一命名为 v2（接续 v18.8 本地试玩版）。主页保留快捷入口并支持滚动浏览历史更新，左侧版本支持滚动条和滚轮。更新多尺寸菱形程序图标。早期未发布版本按开发阶段汇总，不宣称拥有完整逐版日志。
+
+源码打包：`python -m PyInstaller --noconfirm --onefile --windowed --icon app.ico --add-data "app.ico;." --name FabricMedic-v2 main.py`

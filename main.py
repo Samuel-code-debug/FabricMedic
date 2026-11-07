@@ -15,7 +15,10 @@ class App(Workbench):
     def __init__(self, win):
         self.win=win
         threading.excepthook=self._thread_crash
-        win.title('模组体检台 · Fabric')
+        win.title('Fabric Medic v2')
+        import sys
+        icon=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent))/'app.ico'
+        if icon.is_file():win.iconbitmap(str(icon))
         win.geometry('980x680')
         self.temp=tempfile.TemporaryDirectory()
         self.folder=None
@@ -57,12 +60,45 @@ class App(Workbench):
         except Exception as e:
             self.dialog('操作未完成',str(e),'error')
 
+    def discover_versions(self):
+        if self.busy or getattr(self, '_discovering', False): return
+        from discovery import discover
+        self._discovering = True
+        self.discovery_status.configure(text='正在查找常见启动器目录…')
+        result = queue.Queue()
+        known = list(self.prefs.get('instances', {}))
+        def worker():
+            try: result.put((discover(known), None))
+            except Exception as exc: result.put(([], str(exc)))
+        def finish():
+            if result.empty():
+                self.win.after(100, finish)
+                return
+            records, error = result.get()
+            self._discovering = False
+            for record in records:
+                self.prefs.setdefault('instances', {})[record['path']] = record['version']
+            self.persist()
+            self.list_instances()
+            self.discovery_status.configure(text=('查找失败：'+error if error else f'找到 {len(records)} 个版本。点击左侧版本即可扫描；未找到时可手动添加。'))
+        threading.Thread(target=worker, daemon=True).start()
+        finish()
+
+    def prepare_repair(self):
+        self.check()
+        if self.proposed or self.off != self.initial_off:
+            self.dialog('已有方案', '请先确认应用当前方案，或重新扫描后再生成。', mode='info')
+            return
+        self.download(automatic=True, preview=True)
+
     def choose(self):
-        path=filedialog.askdirectory(title='选择 PCL 实例的 mods 文件夹')
+        path=filedialog.askdirectory(title='选择游戏版本文件夹或 mods 文件夹')
         if path:
             folder=Path(path).resolve()
             if folder.name.lower()!='mods':
-                raise ValueError('请选择名为 mods 的文件夹')
+                folder=folder/'mods'
+            if not folder.is_dir():
+                raise ValueError('这个目录中没有 mods 文件夹，请选择游戏版本目录。')
             config=folder.parent/(folder.parent.name+'.json')
             data=json.loads(config.read_text(encoding='utf-8-sig')) if config.is_file() else {}
             version=data.get('clientVersion') or data.get('inheritsFrom')
@@ -72,6 +108,7 @@ class App(Workbench):
                 return
             self.game.set(version.strip())
             self.folder=folder
+            self.detect_loader(folder)
             self.scan()
             self.remember()
             self.show_instance()
@@ -150,6 +187,9 @@ class App(Workbench):
             name=first.get('name') or first.get('id') or p.stem
             self.row_data[p]=(state,name+'\n'+p.name,'；'.join(details))
         self.render_rows(pairs)
+        unknown=sum(not group for group in self.mods.values())
+        self.scan_summary.configure(text=f'{len(pairs)} 对冲突   /   {len(missing)} 个缺失前置   /   {len(self.off & self.disk.keys())} 个拟移出   /   {unknown} 个未识别文件')
+        self.next_step.configure(text=('方案已就绪，请确认文件变更。' if self.proposed else '有问题可先生成修复方案；冲突项可在下方选择保留。' if pairs or missing or self.off else '未发现声明依赖问题。下一步：在启动器中启动游戏验证。'))
         result=extra.splitlines()[0] if extra else f'扫描完成 · {len(pairs)} 对冲突，缺少 {len(missing)} 个前置'
         if extra.startswith('准备好 ') and self.proposed:
             result='待应用：'+ '、'.join(self.mods[p][0]['id'] for p in sorted(self.proposed))
@@ -231,7 +271,7 @@ class App(Workbench):
             raise ValueError('已有手动方案，请先应用，或重新扫描后再自动安装。')
         self.download(automatic=True)
 
-    def download(self,automatic=False):
+    def download(self,automatic=False,preview=False):
         self.check()
         active=dict(self.mods) if automatic else self.active()
         wrong_game={self.mods[p][0]['id']:p for p in self.initial_off} if automatic else {}
@@ -247,7 +287,7 @@ class App(Workbench):
         self.output_summary.configure(text='正在查找兼容版本…')
         out=queue.Queue()
         progress=queue.Queue()
-        self.say('正在查找并校验兼容版本，全部就绪后将自动安装。' if automatic else '正在查找前置，下载后可预览。')
+        self.say('正在查找并校验兼容版本，全部就绪后将自动安装。' if automatic and not preview else '正在生成修复方案，下载校验后供你确认，不会直接修改模组。')
         resolver=lambda *args,**kw:resolve(*args,**kw,loader=self.loader)
         def worker():
             found={}
@@ -337,7 +377,7 @@ class App(Workbench):
             found,errors,swaps=out.get()
             self.busy=False
             self._log_append=True
-            if automatic:
+            if automatic and not preview:
                 try:
                     self.check()
                     if errors:

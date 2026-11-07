@@ -53,8 +53,13 @@ class Workbench:
             button.configure(image=bitmap,compound='left')
             button.pack(fill='x')
         ttk.Label(self.rail,text='版本',style='Side.TLabel').pack(anchor='w',pady=(28,7))
-        self.instance_view=tk.Canvas(self.rail,bd=0,highlightthickness=0,height=1)
-        self.instance_view.pack(fill='both',expand=True)
+        instance_host=ttk.Frame(self.rail,style='Side.TFrame')
+        instance_host.pack(fill='both',expand=True)
+        self.instance_view=tk.Canvas(instance_host,bd=0,highlightthickness=0,height=1)
+        self.instance_scroll=Scrollbar(instance_host,orient='vertical',command=self.instance_view.yview)
+        self.instance_scroll.pack(side='right',fill='y')
+        self.instance_view.pack(side='left',fill='both',expand=True)
+        self.instance_view.configure(yscrollcommand=self.instance_scroll.set)
         self.instances=ttk.Frame(self.instance_view,style='Side.TFrame')
         rows=self.instance_view.create_window(0,0,anchor='nw',window=self.instances)
         self.instance_view.bind('<Configure>',lambda e:self.instance_view.itemconfigure(rows,width=e.width))
@@ -75,11 +80,20 @@ class Workbench:
         self.log.pack(fill='both',expand=True)
         self.deck=ttk.Frame(self.workspace)
         self.deck.pack(fill='both',expand=True)
-        self.home=ttk.Frame(self.deck,padding=(32,26))
+        self.home_shell=ttk.Frame(self.deck)
+        self.home_view=tk.Canvas(self.home_shell,bd=0,highlightthickness=0)
+        self.home_scroll=Scrollbar(self.home_shell,orient='vertical',command=self.home_view.yview)
+        self.home_scroll.pack(side='right',fill='y')
+        self.home_view.pack(side='left',fill='both',expand=True)
+        self.home_view.configure(yscrollcommand=self.home_scroll.set)
+        self.home=ttk.Frame(self.home_view,padding=(32,26))
+        home_item=self.home_view.create_window(0,0,anchor='nw',window=self.home)
+        self.home_view.bind('<Configure>',lambda e:self.home_view.itemconfigure(home_item,width=e.width))
+        self.home.bind('<Configure>',lambda e:self.home_view.configure(scrollregion=self.home_view.bbox('all')))
         self.version_page=ttk.Frame(self.deck,padding=(18,18))
         self.settings=ttk.Frame(self.deck,padding=30)
-        self.pages={'home':self.home,'version':self.version_page,'settings':self.settings}
-        self.home.place(relwidth=1,relheight=1)
+        self.pages={'home':self.home_shell,'version':self.version_page,'settings':self.settings}
+        self.home_shell.place(relwidth=1,relheight=1)
         footer=ttk.Frame(self.home)
         footer.pack(side='bottom',fill='x')
         ttk.Separator(footer).pack(fill='x',pady=(8,6))
@@ -87,20 +101,30 @@ class Workbench:
         statement=ttk.Label(footer,text='本工具仅供学习和参考。检测结果与修复建议请以游戏实际启动和运行情况为准，本工具无法保证解决所有模组冲突。感谢大家使用 Fabric Medic。',style='Muted.TLabel',justify='left',wraplength=500)
         statement.pack(fill='x',pady=(3,0))
         footer.bind('<Configure>',lambda e:statement.configure(wraplength=max(100,e.width)))
-        ttk.Label(self.home,text='Fabric Medic  /  更新记录',style='Muted.TLabel').pack(anchor='w')
-        ttk.Separator(self.home).pack(fill='x',pady=(12,22))
-        ttk.Label(self.home,text='更新内容',style='Title.TLabel').pack(anchor='w')
-        for release,lines in [
-            ('v18.7.1',('主页新增使用声明，说明卡片支持渐显和渐隐。',)),
-            ('v18.7',('工作台按冲突和缺失前置筛选，输出区单独显示处理结果。',)),
-            ('v18.6.1',('修复切换主题后主页和设置图标消失的问题。',)),
-            ('v18.6',('主页集中展示更新记录。','点击左侧版本名称可查看模组、依赖和冲突。')),
-            ('v18.5.6',('启动说明移到主窗口内，修复说明被遮挡时无法操作的问题。',)),
-            ('v18.5.5',('调整窗口拖动定位，给说明卡片加上灰色轮廓。',)),
-        ]:
-            ttk.Label(self.home,text=release,font=('Segoe UI',13,'bold')).pack(anchor='w',pady=(12,3))
-            for line in lines:
-                ttk.Label(self.home,text='•  '+line,wraplength=500).pack(anchor='w',pady=2)
+        ttk.Label(self.home,text='先找到游戏，再解决问题',style='Title.TLabel').pack(anchor='w',pady=(0,12))
+        ttk.Label(self.home,text='选择左侧版本开始扫描。修复前会列出文件变更，并备份被替换的文件。',wraplength=530).pack(anchor='w')
+        start=ttk.Frame(self.home)
+        start.pack(fill='x',pady=18)
+        self.button(start,'查找我的游戏版本',self.discover_versions).pack(side='left',padx=(0,12),ipady=6)
+        self.button(start,'手动添加版本',lambda:self.safe(self.choose)).pack(side='left',ipady=6)
+        self.discovery_status=ttk.Label(self.home,text='支持 Fabric、Forge 与 Mix。查找只读取目录，不修改游戏。',style='Muted.TLabel',wraplength=530)
+        self.discovery_status.pack(anchor='w')
+        ttk.Separator(self.home).pack(fill='x',pady=24)
+        ttk.Label(self.home,text='使用步骤',font=('Microsoft YaHei UI',13,'bold')).pack(anchor='w')
+        for line in ('1   选择版本：自动识别已知加载器，扫描模组依赖。','2   生成方案：查找并校验兼容文件，先预览再应用。','3   启动验证：回启动器试玩；需要时从操作面板恢复备份。'):
+            ttk.Label(self.home,text=line,wraplength=530).pack(anchor='w',pady=10)
+        from changelog import RELEASES
+        ttk.Separator(self.home).pack(fill='x',pady=20)
+        ttk.Label(self.home,text='更新记录',style='Title.TLabel').pack(anchor='w')
+        for version,notes in RELEASES:
+            ttk.Label(self.home,text=version,font=('Segoe UI',13,'bold')).pack(anchor='w',pady=(18,6))
+            text=ttk.Label(self.home,text=notes,wraplength=520,justify='left')
+            text.pack(fill='x',anchor='w')
+            text.bind('<Configure>',lambda e,w=text:w.configure(wraplength=max(120,e.width)))
+        def bind_home(widget):
+            widget.bind('<MouseWheel>',lambda e:self.home_view.yview_scroll(-int(e.delta/120) or (-1 if e.delta>0 else 1),'units'))
+            for child in widget.winfo_children():bind_home(child)
+        bind_home(self.home_shell)
         head=ttk.Frame(self.version_page)
         head.pack(fill='x')
         self.version_title=ttk.Label(head,text='模组工作台',style='Title.TLabel',cursor='hand2')
@@ -109,6 +133,14 @@ class Workbench:
         self.button(head,'◧   输出',self.toggle_drawer).pack(side='right')
         self.location=ttk.Label(self.version_page,text='从左下角操作面板添加第一个实例',style='Muted.TLabel',wraplength=560)
         self.location.pack(anchor='w',pady=(10,22))
+        self.scan_summary=ttk.Label(self.version_page,text='等待扫描',font=('Microsoft YaHei UI',11,'bold'),wraplength=600)
+        self.scan_summary.pack(anchor='w',pady=(0,6))
+        self.next_step=ttk.Label(self.version_page,text='',style='Muted.TLabel',wraplength=600)
+        self.next_step.pack(anchor='w')
+        actions=ttk.Frame(self.version_page)
+        actions.pack(fill='x',pady=12)
+        for label,action in [('重新扫描',self.scan),('生成修复方案',self.prepare_repair),('确认应用方案',self.commit)]:
+            self.button(actions,label,lambda fn=action:self.safe(fn)).pack(side='left',padx=(0,10))
         ttk.Separator(self.version_page).pack(fill='x')
         filters=ttk.Frame(self.version_page)
         filters.pack(fill='x',pady=8)
@@ -129,7 +161,7 @@ class Workbench:
             self.tree.column(c,width=width,minwidth=80,stretch=c!='state')
         sx=Scrollbar(inner,orient='horizontal',command=self.tree.xview)
         sy=Scrollbar(inner,orient='vertical',command=self.tree.yview)
-        self.scrollbars=(sx,sy)
+        self.scrollbars=(sx,sy,self.instance_scroll,self.home_scroll)
         def display(scroll,first,last):
             scroll.set(first,last)
             if float(last)-float(first)<.99999:
@@ -285,6 +317,7 @@ class Workbench:
         s.map('Treeview',background=[('selected',sel)],foreground=[('selected',accent)])
         s.map('TCombobox',fieldbackground=[('readonly',side)],foreground=[('readonly',fg)])
         self.instance_view.configure(bg=side)
+        self.home_view.configure(bg=bg)
         self.tree.tag_configure('pair',foreground=accent,background=side)
         s.configure('Treeview',rowheight=44)
         self.log.configure(bg=side,fg=inverse(side))
@@ -311,11 +344,20 @@ class Workbench:
         if self.instances.winfo_height()>self.instance_view.winfo_height():
             self.instance_view.yview_scroll(-1 if event.delta>0 else 1,'units')
 
+    def detect_loader(self,path):
+        from discovery import inspect_instance
+        record=inspect_instance(path)
+        if record and record['loader']:
+            self.loader=record['loader']
+            self.prefs['loader']=self.loader
+            self.logo.configure(text='◈   '+self.loader.title()+' Medic')
+
     def activate(self,path):
         if not Path(path).is_dir():
             raise ValueError('实例目录已移动，请从操作面板重新选择。')
         self.folder=Path(path)
         self.game.set(self.prefs['instances'][path])
+        self.detect_loader(path)
         self.scan()
         self.remember()
         self.show_instance()
@@ -329,7 +371,9 @@ class Workbench:
         if self.busy:return
         if self.folder==Path(path):
             self.show_instance()
-        else:self.safe(lambda:self.activate(path))
+        else:
+            if (getattr(self,'proposed',set()) or getattr(self,'off',set())!=getattr(self,'initial_off',set())) and not self.dialog('切换版本','当前方案尚未应用，放弃方案并切换版本？'):return
+            self.safe(lambda:self.activate(path))
 
     def ease(self,key,step,done=lambda:None,motion=None,seconds=None):
         if key in self.anim:
