@@ -190,6 +190,8 @@ class Workbench:
             self.setting_fields.append(control)
             control.action=lambda k=key,opts=options,c=control:self.palette(k,opts,c)
             control.pack(anchor='w',ipadx=12)
+        ttk.Label(self.settings,text='下载缓存',style='Muted.TLabel').pack(anchor='w',pady=(28,8))
+        self.button(self.settings,'清理缓存',lambda:self.safe(self.clear_cache)).pack(anchor='w')
         self.paint()
         self.list_instances()
         self.win.bind('<Escape>',lambda e:self.close_wheel() if self.wheel else None,add='+')
@@ -345,6 +347,40 @@ class Workbench:
             self.tint(row,0)
             row.pack(fill='x',padx=2,pady=3)
             row.bind('<MouseWheel>',self.scroll_instances)
+            row.bind('<Button-3>',lambda e,p=path:self.instance_menu(e,p))
+
+    def instance_menu(self,event,path):
+        menu=tk.Menu(self.win,tearoff=False)
+        menu.add_command(label='从列表移除',command=lambda:self.safe(lambda:self.remove_instance(path)))
+        try:menu.tk_popup(event.x_root,event.y_root)
+        finally:menu.grab_release()
+
+    def remove_instance(self,path):
+        if not self.dialog('移除版本记录','仅从列表移除，不删除游戏目录或模组。继续？'):return
+        self.prefs.get('instances',{}).pop(path,None)
+        if self.prefs.get('last')==path:self.prefs.pop('last',None)
+        if self.folder==Path(path):
+            self.folder=None
+            self.navigate('home')
+        self.persist()
+        self.list_instances()
+
+    def clear_cache(self):
+        root=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'FabricMedic'/'downloads'
+        if root.is_symlink() or root.is_junction():
+            raise ValueError('缓存目录是链接，未清理')
+        files=[p for p in root.glob('*') if p.is_file() and not p.is_symlink() and p.suffix in ('.jar','.tmp')] if root.exists() else []
+        size=sum(p.stat().st_size for p in files)
+        if not self.dialog('清理缓存',f'清理 {len(files)} 个下载缓存文件，约 {size/1048576:.1f} MB。配置、游戏和备份不受影响。继续？'):return
+        failed=0
+        for p in files:
+            try:
+                if p.resolve().parent!=root.resolve():raise ValueError('路径不符')
+                p.unlink()
+            except (OSError,ValueError):failed+=1
+        from core import _list_cache
+        _list_cache.clear()
+        self.dialog('清理完成',f'已清理 {len(files)-failed} 个文件'+(f'，{failed} 个文件被占用或无法删除' if failed else ''),mode='info')
 
     def scroll_instances(self,event):
         if self.instances.winfo_height()>self.instance_view.winfo_height():

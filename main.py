@@ -15,7 +15,7 @@ class App(Workbench):
     def __init__(self, win):
         self.win=win
         threading.excepthook=self._thread_crash
-        win.title('Fabric Medic v2.1')
+        win.title('Fabric Medic v2.2')
         import sys
         icon=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent))/'app.ico'
         if icon.is_file():win.iconbitmap(str(icon))
