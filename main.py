@@ -5,7 +5,7 @@ import threading
 import time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
-from core import Path, tempfile, metadata, matches, analyze, resolve, apply, restore, backup_root, install_verified
+from core import Path, tempfile, metadata, matches, analyze, resolve, apply, restore, backup_root, install_verified, LookupControl, JobStopped
 
 
 from workbench import Workbench
@@ -15,7 +15,7 @@ class App(Workbench):
     def __init__(self, win):
         self.win=win
         threading.excepthook=self._thread_crash
-        win.title('Fabric Medic v2')
+        win.title('Fabric Medic v2.1')
         import sys
         icon=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent))/'app.ico'
         if icon.is_file():win.iconbitmap(str(icon))
@@ -28,16 +28,35 @@ class App(Workbench):
         self.say('扫描只生成方案。点击冲突行可选择保留谁；应用前请关闭游戏。')
 
     def say(self,text,append=False):
+        if not append:self.log_lines=[]
+        self.log_lines=(getattr(self,'log_lines',[])+text.splitlines())[-1000:]
+        self.render_output()
+        if self.busy and not self.drawer_open:self.toggle_drawer()
+
+    def render_output(self):
+        lines=getattr(self,'log_lines',[])
+        if getattr(self,'details_open',False):
+            lines=lines+['',getattr(self,'diagnostic_detail','')]
+        else:lines=lines[-6:]
         self.log.config(state='normal')
-        if not append:
-            self.log.delete('1.0','end')
-        elif self.log.index('end-1c')!='1.0':
-            self.log.insert('end','\n')
-        self.log.insert('end',text)
-        self.log.see('end')
+        self.log.delete('1.0','end')
+        self.log.insert('end','\n'.join(lines))
         self.log.config(state='disabled')
-        if self.busy and not self.drawer_open:
-            self.toggle_drawer()
+
+    def toggle_details(self):
+        self.details_open=not getattr(self,'details_open',False)
+        self.detail_button.configure(text='收起详情' if self.details_open else '查看详情')
+        self.render_output()
+
+    def export_output(self):
+        path=filedialog.asksaveasfilename(title='导出检测详情',defaultextension='.txt',initialfile='FabricMedic-report.txt')
+        if path:Path(path).write_text('\n'.join(getattr(self,'log_lines',[]))+'\n'+getattr(self,'diagnostic_detail',''),encoding='utf-8')
+
+    def cancel_lookup(self):
+        control=getattr(self,'lookup_control',None)
+        if self.busy and control:
+            control.cancelled.set()
+            self.output_summary.configure(text='正在取消，等待当前网络读操作结束（通常 8 秒内）…')
 
     def _thread_crash(self,args):
         try:
@@ -156,7 +175,8 @@ class App(Workbench):
         self.tree.delete(*self.tree.get_children())
         self.pairs,_,_=analyze(self.mods,self.version)
         repairs={}
-        pairs,missing,notes=analyze(self.active(),self.version,repairs)
+        issues=[]
+        pairs,missing,notes=analyze(self.active(),self.version,repairs,issues)
         # 把「缺哪个前置」落到表格行上，不再只写在输出区
         missing_by_mod={}
         for dep,reqs in missing.items():
@@ -194,11 +214,25 @@ class App(Workbench):
         if extra.startswith('准备好 ') and self.proposed:
             result='待应用：'+ '、'.join(self.mods[p][0]['id'] for p in sorted(self.proposed))
         self.output_summary.configure(text=result)
-        lines=[f'{a.name} ↔ {b.name}：'+ '；'.join(sorted(v)) for (a,b),v in pairs.items()]
-        lines += [f'缺少 {key} ← '+', '.join(f'{n} {r}' for n,r in req) for key,req in missing.items()]
-        append=getattr(self,'_log_append',False)
-        self._log_append=False
-        self.say('\n'.join(filter(None,[extra,*lines,*notes])) or '已识别的模组未发现声明冲突或缺失前置。',append=append)
+        grouped={}
+        for issue in issues:
+            grouped.setdefault((issue['level'],issue['target'],issue['reason']),[]).append(issue)
+        review=sum(k[0]=='review' for k in grouped)+unknown
+        errors=sum(k[0]=='error' for k in grouped)+len(pairs)+len(self.initial_off)
+        self.scan_summary.configure(text=f'{errors} 项明确问题   /   {review} 项待核实   /   {len(self.proposed)} 个待安装文件')
+        self.next_step.configure(text='方案已准备，请查看变更再应用。' if self.proposed else '待核实项不会自动修改；可运行的整合包无需因为提示而修复。' if review else '按声明检查完成，请以游戏实际启动结果为准。')
+        detail=[f'{a.name} ↔ {b.name}：'+ '；'.join(sorted(v)) for (a,b),v in pairs.items()]
+        for (level,target,reason),items in grouped.items():
+            label={'error':'明确问题','review':'待核实','info':'普通提示'}[level]
+            detail.append(f'[{label}] {target}：{reason}，涉及 {len(set(i["owner"] for i in items))} 个模组')
+            for item in items:
+                detail.append(f"  {item['owner']}：要求 {item['rule']}；已安装 {', '.join(item['installed']) or '未找到'}")
+        detail += [f'[待核实] {p.name}：{self.reasons[p]}' for p,group in self.mods.items() if not group]
+        self.diagnostic_detail='\n'.join(detail) or '未发现声明依赖问题。'
+        summary=f'扫描完成：{errors} 项明确问题，{review} 项待核实。'
+        self.output_summary.configure(text=extra.splitlines()[0] if extra else summary)
+        if extra:self.say(extra,append=True)
+        self.say(summary+'\n待核实项不自动替换或移除。点击「查看详情」查看分组与依据。',append=bool(extra))
 
     def select_filter(self,key):
         self.filter_key=key
@@ -288,7 +322,8 @@ class App(Workbench):
         out=queue.Queue()
         progress=queue.Queue()
         self.say('正在查找并校验兼容版本，全部就绪后将自动安装。' if automatic and not preview else '正在生成修复方案，下载校验后供你确认，不会直接修改模组。')
-        resolver=lambda *args,**kw:resolve(*args,**kw,loader=self.loader)
+        control=self.lookup_control=LookupControl(progress.put,seconds=120)
+        resolver=lambda *args,**kw:resolve(*args,**kw,loader=self.loader,control=control)
         def worker():
             found={}
             errors=[]
@@ -296,6 +331,7 @@ class App(Workbench):
             swaps={}
             try:
                 for _ in range(60):
+                    control.check()
                     live={p:m for p,m in (active|found).items() if p not in swaps}
                     repairs={}
                     missing=analyze(live,self.version,repairs)[1]
@@ -355,6 +391,8 @@ class App(Workbench):
                                 raise ValueError('候选版本与当前保留的模组有已声明冲突')
                             swaps[old]=p
                         found[p]=mods
+                    except JobStopped:
+                        raise
                     except Exception as e:
                         errors.append(f'{k}：{e}')
                         progress.put('　'+k+'：'+str(e))
@@ -368,14 +406,15 @@ class App(Workbench):
                 self.say(progress.get(),append=True)
             self._log_append=True
             if out.empty():
-                if time.monotonic()-started>120:
-                    self.busy=False
-                    self.refresh('查找超时（2 分钟无结果），已中断本轮。')
-                    return
+                elapsed=int(time.monotonic()-started)
+                if not control.cancelled.is_set():self.output_summary.configure(text=f'正在查找兼容版本 · 已用 {elapsed} 秒 / 最长 120 秒')
                 self.win.after(150,finish)
                 return
             found,errors,swaps=out.get()
             self.busy=False
+            if control.cancelled.is_set() or time.monotonic()>=control.deadline:
+                self.refresh('本轮已取消或超时，候选已丢弃，游戏文件未修改。')
+                return
             self._log_append=True
             if automatic and not preview:
                 try:

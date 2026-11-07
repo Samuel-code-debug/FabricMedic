@@ -121,6 +121,10 @@ def titlebar(app):
         panel=tk.Frame(win,bg=side,padx=8,pady=7)
         popup=panel
         def choose(mode):
+            if app.busy:
+                dismiss()
+                app.dialog('正在查找','请先取消查找，再切换加载器。',mode='info')
+                return
             if mode!=app.loader and (getattr(app,'proposed',set()) or getattr(app,'off',set())!=getattr(app,'initial_off',set())):
                 dismiss()
                 if not app.dialog('切换加载器','放弃当前未应用方案并重新扫描？'):return

@@ -3,6 +3,7 @@ import io
 import json
 import os
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 import re
 import shutil
@@ -37,6 +38,8 @@ def matches(version, rule):
             return (a + [0]*len(prefix))[:len(prefix)] == prefix
         floor = ref.endswith('-')
         prerelease='-' in ref
+        if prerelease and not floor:
+            return None  # Qualifier semantics differ between Fabric and Maven; do not guess.
         b = parts(ref.split('-',1)[0] if prerelease else ref)
         if a is None or b is None:
             return None
@@ -58,7 +61,7 @@ def metadata(source,loader='fabric'):
     if loader=='mix':
         with zipfile.ZipFile(source) as jar:
             names=set(jar.namelist())
-            if 'META-INF/mods.toml' in names:
+            if 'META-INF/mods.toml' in names or 'META-INF/jarjar/metadata.json' in names:
                 return metadata(source,'forge')
             if 'META-INF/MANIFEST.MF' in names and 'META-INF/services/cpw.mods.modlauncher.api.ITransformationService' in names:
                 manifest=jar.read('META-INF/MANIFEST.MF').decode('utf8','replace').replace('\r\n ','')
@@ -82,7 +85,7 @@ def metadata(source,loader='fabric'):
                 return []
             if z.getinfo('fabric.mod.json').file_size > 1 << 20:
                 raise ValueError('元数据过大')
-            m = json.loads(z.read('fabric.mod.json').decode('utf-8-sig'))
+            m = json.loads(z.read('fabric.mod.json').decode('utf-8-sig'), strict=False)
             if m.get('schemaVersion') != 1:
                 raise ValueError('未识别的 Fabric 元数据版本')
             if not isinstance(m['id'],str) or not isinstance(m['version'],str):
@@ -109,9 +112,12 @@ def ids(m):
     return [m['id'], *m.get('provides',[])]
 
 
-def analyze(active, game, repairs=None):
+def analyze(active, game, repairs=None, diagnostics=None):
     providers = {}
     pairs, missing, notes = {}, {}, []
+    issues = []
+    def issue(level, target, owner, rule, installed, reason):
+        issues.append(dict(level=level,target=target,owner=owner,rule=rule,installed=installed,reason=reason))
     for file, mods in active.items():
         for m in mods:
             for key in ids(m):
@@ -136,9 +142,15 @@ def analyze(active, game, repairs=None):
                         results=[matches(game,rule)]
                     if kind=='depends':
                         if not results:
-                            missing.setdefault(target,[]).append((name,rule))
+                            if any(not group for group in active.values()):
+                                issue('review',target,name,rule,[],'有未识别文件，尚不能确认前置缺失')
+                            else:
+                                missing.setdefault(target,[]).append((name,rule))
+                                issue('error',target,name,rule,[],'缺少必需前置')
                         elif True not in results:
-                            notes.append(f'{name} 需要 {target} {rule}（当前不满足或无法判定）')
+                            level='review' if None in results else 'error'
+                            installed=[game] if target=='minecraft' else [v['version'] for _,v in candidates]
+                            issue(level,target,name,rule,installed,'版本格式尚无法可靠比较' if level=='review' else '已安装版本不符合要求')
                             if repairs is not None and None not in results and len(candidates)==1:
                                 g,provider=candidates[0]
                                 if active[g][0] is provider and provider['id']==target:
@@ -146,22 +158,66 @@ def analyze(active, game, repairs=None):
                     else:
                         for (g,_),res in zip(candidates,results):
                             if res is True:
-                                pair(f,g,('严重冲突' if kind=='breaks' else '兼容性警告')+f'：{name} → {target}')
+                                if kind=='breaks':pair(f,g,'严重冲突：'+f'{name} → {target}')
+                                else:issue('info',target,name,rule,[providers[target][0][1]['version']],'模组声明了兼容性建议')
                             elif res is None:
-                                notes.append(f'无法判断 {name} 与 {target} 的冲突范围 {rule}')
+                                issue('review',target,name,rule,[v['version'] for _,v in candidates],'无法核实冲突范围')
+    if diagnostics is not None: diagnostics.extend(issues)
+    groups={}
+    for item in issues:
+        if item['reason']=='缺少必需前置':continue
+        groups.setdefault((item['level'],item['target'],item['reason']),[]).append(item)
+    for (level,target,reason),items in groups.items():
+        label={'error':'明确问题','review':'待核实','info':'普通提示'}[level]
+        notes.append(f"[{label}] {target}：{reason}，涉及 {len(set(x['owner'] for x in items))} 个模组")
     return pairs,missing,notes
 
 
-def fetch(url, limit):
-    request=Request(url,headers={'User-Agent':'FabricMedic/0.1 (local desktop utility)'})
-    with urlopen(request,timeout=18) as r:
-        data=r.read(limit+1)
-    if len(data)>limit:
-        raise ValueError('下载超出大小限制')
-    return data
+class JobStopped(RuntimeError):
+    pass
 
 
-def cached_jar(file):
+class LookupControl:
+    def __init__(self, progress=lambda message: None, seconds=120):
+        self.cancelled=threading.Event()
+        self.deadline=time.monotonic()+seconds
+        self.progress=progress
+    def check(self):
+        if self.cancelled.is_set():raise JobStopped('已取消查找，游戏文件未修改')
+        if time.monotonic()>=self.deadline:raise JobStopped('查找超时，已停止后续请求；游戏文件未修改')
+    def report(self,message):
+        self.check()
+        self.progress(message)
+
+
+def fetch(url, limit, control=None):
+    control=control or LookupControl()
+    control.check()
+    request=Request(url,headers={'User-Agent':'FabricMedic/2.1 (local desktop utility)'})
+    try:
+        with urlopen(request,timeout=max(.1,min(8,control.deadline-time.monotonic()))) as r:
+            chunks=[];total=0;last=0
+            while True:
+                control.check()
+                data=r.read1(min(65536,limit+1-total))
+                if not data:break
+                chunks.append(data);total+=len(data)
+                if total>limit:raise ValueError('下载超出大小限制')
+                if time.monotonic()-last>=1:
+                    control.report(f'正在接收数据：{total/1048576:.1f} MB')
+                    last=time.monotonic()
+        control.check()
+        return b''.join(chunks)
+    except HTTPError:
+        raise
+    except (OSError, TimeoutError) as exc:
+        control.check()
+        raise RuntimeError('网络请求失败或等待超过 8 秒，请稍后重试：'+str(exc)) from exc
+
+
+def cached_jar(file, control=None):
+    control=control or LookupControl()
+    control.check()
     key=file['hashes']['sha512'].lower()
     if not re.fullmatch('[0-9a-f]{128}',key):
         raise ValueError('无效 SHA-512')
@@ -171,10 +227,13 @@ def cached_jar(file):
         if path.stat().st_size <= 128<<20:
             data=path.read_bytes()
             if hashlib.sha512(data).hexdigest()==key:
+                control.report('复用已校验的下载缓存')
                 return data
     except OSError:
         pass
-    data=fetch(file['url'],128<<20)
+    control.report('下载 '+file['filename'])
+    data=fetch(file['url'],128<<20,control)
+    control.report('校验 SHA-512：'+file['filename'])
     if hashlib.sha512(data).hexdigest()!=key:
         raise ValueError('SHA-512 校验失败')
     try:
@@ -200,13 +259,15 @@ def cached_jar(file):
 _list_cache={}
 
 
-def resolve(target, requirements, game, folder, accept=None, loader='fabric', project=None, file_loader=None):
+def resolve(target, requirements, game, folder, accept=None, loader='fabric', project=None, file_loader=None, control=None):
+    control=control or LookupControl()
+    control.check()
     if loader=='mix':
         bridge={'connector':'connector','connectormod':'connector','fabric_api':'forgified-fabric-api','fabric-api':'forgified-fabric-api','fabric':'forgified-fabric-api'}
         errors=[]
         for platform in (('forge',) if target in bridge else ('forge','fabric')):
             try:
-                return resolve(target,requirements,game,folder,accept,platform,bridge.get(target),'mix')
+                return resolve(target,requirements,game,folder,accept,platform,bridge.get(target),'mix',control)
             except ValueError as exc:
                 errors.append(str(exc))
             except HTTPError as exc:
@@ -220,8 +281,10 @@ def resolve(target, requirements, game, folder, accept=None, loader='fabric', pr
     url='https://api.modrinth.com/v2/project/'+quote(slug,safe='')+'/version?'+query
     stamp,versions=_list_cache.get(url,(0,None))
     if versions is None or time.monotonic()-stamp>120:
-        versions=json.loads(fetch(url,12<<20))
+        control.report(f'获取 {target} 的 {loader} / {game} 版本列表')
+        versions=json.loads(fetch(url,12<<20,control))
         _list_cache[url]=(time.monotonic(),versions)
+    control.check()
     candidates=[]
     for v in versions[:40]:
         # Download only a candidate whose published version plausibly satisfies the constraints.
@@ -241,9 +304,11 @@ def resolve(target, requirements, game, folder, accept=None, loader='fabric', pr
         while start<len(candidates):
             batch=candidates[start:start+(2 if start else 1)]
             start+=len(batch)
-            jobs=[pool.submit(cached_jar,f) for _,f in batch]
+            control.report(f'{target}：检查候选 {start-len(batch)+1}–{start} / {len(candidates)}')
+            jobs=[pool.submit(cached_jar,f,control) for _,f in batch]
             for (v,_),job in zip(batch,jobs):
                 data=job.result()
+                control.check()
                 mods=metadata(io.BytesIO(data),file_loader or loader)
                 if accept and not accept(mods):
                     continue

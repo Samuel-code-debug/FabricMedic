@@ -30,10 +30,9 @@ def read(source,depth=0,budget=None):
             budget[0]-=size
             if budget[0]<0 or depth>8:raise ValueError('Forge 元数据超过扫描限制')
             return z.read(name)
-        if 'META-INF/mods.toml' not in z.namelist():return []
-        doc=tomllib.loads(load('META-INF/mods.toml').decode('utf-8-sig'))
+        doc=tomllib.loads(load('META-INF/mods.toml').decode('utf-8-sig')) if 'META-INF/mods.toml' in z.namelist() else {}
         mods=[]
-        for entry in doc['mods']:
+        for entry in doc.get('mods',[]):
             key=entry['modId']
             version=str(entry.get('version','?'))
             if version=='${file.jarVersion}' and 'META-INF/MANIFEST.MF' in z.namelist():

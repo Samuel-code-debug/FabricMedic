@@ -20,7 +20,7 @@ Windows 上的 Minecraft 模组体检工具。选中一个实例的 `mods` 文�
 
 ## 下载与运行
 
-到 [Releases](../../releases) 下载最新的 `FabricMedic-v2.zip`，解压，双击 `FabricMedic-v2.exe`。
+到 [Releases](../../releases) 下载最新的 `FabricMedic-v2.1.zip`，解压，双击 `FabricMedic-v2.1.exe`。
 
 - 免安装，不写注册表，不放后台服务
 - 配置存在 `%LOCALAPPDATA%\FabricMedic\workbench.json`
@@ -129,7 +129,7 @@ python main.py
 ## 从源码构建
 
 ```
-python -m PyInstaller --onefile --windowed --name FabricMedic-v2 main.py --noconfirm --distpath dist --workpath build
+python -m PyInstaller --onefile --windowed --name FabricMedic-v2.1 main.py --noconfirm --distpath dist --workpath build
 ```
 
 需要先 `pip install pyinstaller`。产物在 `dist\`。
@@ -157,4 +157,14 @@ MIT
 
 新版统一命名为 v2（接续 v18.8 本地试玩版）。主页保留快捷入口并支持滚动浏览历史更新，左侧版本支持滚动条和滚轮。更新多尺寸菱形程序图标。早期未发布版本按开发阶段汇总，不宣称拥有完整逐版日志。
 
-源码打包：`python -m PyInstaller --noconfirm --onefile --windowed --icon app.ico --add-data "app.ico;." --name FabricMedic-v2 main.py`
+源码打包：`python -m PyInstaller --noconfirm --onefile --windowed --icon app.ico --add-data "app.ico;." --name FabricMedic-v2.1 main.py`
+
+## v2.1 更新
+
+- 修正描述含换行的 Fabric 元数据读取，以及没有顶层 mods.toml 的 Forge 内嵌依赖读取。
+- 检测结果区分明确问题、待核实与普通提示；复杂版本格式不再当成明确不兼容。
+- 重复依赖按目标与原因分组，默认显示摘要，详情可展开和导出。
+- 查找显示阶段和耗时，支持取消、120 秒任务预算与 8 秒网络读取超时。取消需等待当前阻塞调用返回。
+- 预览版的界面实验不包含在本次正式发布中。
+
+验证：8 项诊断单元测试、临时目录修复预览/应用/恢复与取消流程通过。实际整合包仅只读扫描，未代替游戏启动验证。
