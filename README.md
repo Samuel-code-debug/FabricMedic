@@ -20,7 +20,7 @@ Windows 上的 Minecraft 模组体检工具。选中一个实例的 `mods` 文�
 
 ## 下载与运行
 
-到 [Releases](../../releases) 下载最新的 `FabricMedic-v2.2.zip`，解压，双击 `FabricMedic-v2.2.exe`。
+到 [v2.3 Release](https://github.com/Samuel-code-debug/FabricMedic/releases/tag/v2.3) 下载 `FabricMedic-v2.3.zip`，解压后双击 `FabricMedic-v2.3.exe`。
 
 - 免安装，不写注册表，不放后台服务
 - 配置存在 `%LOCALAPPDATA%\FabricMedic\workbench.json`
@@ -49,7 +49,7 @@ python main.py
 
 选完目录会自动扫一遍。顶上一行显示当前路径、游戏版本和加载器。
 
-如果加载器不对，点左上角 **Fabric Medic 旁边的箭头**，在下拉里切 Fabric / Forge，它会按对应规则重新扫。
+如果加载器不对，点左上角 **Fabric Medic 旁边的箭头**，在下拉里切 Fabric / Forge / Mix，它会按对应规则重新扫。
 
 ### 3. 看结果
 
@@ -87,7 +87,7 @@ python main.py
 备份位置：
 
 ```
-<实例目录>\FabricMedic\.Backup\<时间戳>\
+<实例目录>\mods-FabricMedic-backups\<时间戳与批次标识>\
 ```
 
 时间戳形如 `20261105-072301`，每次应用生成一个批次，互不覆盖。
@@ -172,3 +172,13 @@ MIT
 ## v2.2
 
 版本列表右键「从列表移除」仅删除记录，不删除游戏文件。设置中的「清理缓存」清理下载缓存，不影响配置、游戏和备份。再次自动发现时，被移除的版本仍可能重新出现在列表。
+
+## v2.3 Mix 修复
+
+Mix 使用实际 Forge 实例与 Connector，不会将 Fabric 加载器转换为 Forge。修复方案可备份替换原版 Fabric API 为 Forgified Fabric API，并补全桥接依赖。查找没有 120 秒总时限，仍可取消；单次网络等待保留限制。
+
+版本比较按声明来源区分 Fabric 与 Forge。静态依赖通过不代表游戏启动或所有运行时兼容性已验证；详见 [v2.3 更新说明](v2.3-notes.md)。
+
+### v2.3 启动日志诊断
+
+Mix 扫描会读取所选实例的 `logs/latest.log`，将明确的转换、注入和加载语言错误显示在详情中，并尝试查找对应 Forge 原生候选。旧日志不会用于判断日志之后更新的模组文件。候选通过校验仍需重新启动游戏验证，无法保证所有桥接运行时问题都能自动修复。

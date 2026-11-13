@@ -16,6 +16,22 @@ def jar(entries):
     return result
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_mix_bridge_requirements(self):
+        m=metadata(jar({'fabric.mod.json':json.dumps({'schemaVersion':1,'id':'example','version':'1'})}),'mix')
+        self.assertEqual(set(analyze({Path('a.jar'):m},'1.20.1')[1]),{'connector','fabric_api'})
+
+    def test_connector_manifest_before_jarjar(self):
+        m=metadata(jar({'META-INF/jarjar/metadata.json':'{"jars":[]}',
+            'META-INF/services/cpw.mods.modlauncher.api.ITransformationService':'x',
+            'META-INF/MANIFEST.MF':'Automatic-Module-Name: org.sinytra.connector\nImplementation-Version: 1.0\n'}),'mix')
+        self.assertIn('connectormod',m[0]['provides'])
+        self.assertIn('fabric_api',m[0]['depends'])
+
+    def test_connector_toml_alias(self):
+        m=metadata(jar({'META-INF/mods.toml':'[[mods]]\nmodId="connectormod"\nversion="1"'}),'mix')
+        self.assertIn('connector',m[0]['provides'])
+        self.assertIn('fabric_api',m[0]['depends'])
+
     def test_description_newlines(self):
         data='{"schemaVersion":1,"id":"betterend","version":"4.0.11","description":"line one\nline two"}'
         self.assertEqual(metadata(jar({'fabric.mod.json':data}))[0]['id'],'betterend')

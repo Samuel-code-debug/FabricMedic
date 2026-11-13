@@ -17,9 +17,64 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 
+class ForgeRule(str):
+    """Maven range from mods.toml; unsupported qualifiers stay unknown."""
+
+
+def maven_compare(left,right):
+    # Numeric hyphen suffixes used by Moonlight/Supplementaries are numeric
+    # Maven items, not SemVer prerelease strings. Only compare the same prefix.
+    numeric=re.fullmatch(r'(\d+(?:\.\d+)*)-(\d+(?:\.\d+)*)',left)
+    other=re.fullmatch(r'(\d+(?:\.\d+)*)-(\d+(?:\.\d+)*)',right)
+    if numeric and other and numeric[1]==other[1]:
+        a=list(map(int,numeric[2].split('.')));b=list(map(int,other[2].split('.')))
+        size=max(len(a),len(b));a += [0]*(size-len(a));b += [0]*(size-len(b))
+        return (a>b)-(a<b)
+    def parse(value):
+        m=re.fullmatch(r'(\d+(?:\.\d+)*)(?:-(alpha|beta|milestone|rc)[.-]?(\d+))?(\+.*)?',value,re.I)
+        if not m:return None
+        return list(map(int,m[1].split('.'))), {'alpha':0,'beta':1,'milestone':2,'rc':3,None:4}[m[2].lower() if m[2] else None],int(m[3] or 0),m[4]
+    a,b=parse(left),parse(right)
+    if a is None or b is None:return None
+    av,bv=a[0],b[0];size=max(len(av),len(bv));av += [0]*(size-len(av));bv += [0]*(size-len(bv))
+    for x,y in ((av,bv),(a[1],b[1]),(a[2],b[2])):
+        if x!=y:return (x>y)-(x<y)
+    return 0 if a[3]==b[3] else None
+
+
+class FabricRule(str):
+    """Preserve the declaring loader's comparison semantics through planning."""
+
+
+def fabric_compare(left, right):
+    def parse(value):
+        m=re.fullmatch(r'(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]*))?(?:\+[^ ]*)?',value)
+        if not m:return None
+        return list(map(int,m[1].split('.'))), m[2]
+    a,b=parse(left),parse(right)
+    if a is None or b is None:return None
+    an,ap=a;bn,bp=b
+    size=max(len(an),len(bn));an += [0]*(size-len(an));bn += [0]*(size-len(bn))
+    if an!=bn:return (an>bn)-(an<bn)
+    if ap==bp:return 0
+    if ap is None:return 1
+    if bp is None:return -1
+    if ap=='':return -1
+    if bp=='':return 1
+    aa,bb=ap.split('.'),bp.split('.')
+    for x,y in zip(aa,bb):
+        if x==y:continue
+        if x.isdigit() and y.isdigit():
+            if int(x)==int(y):continue
+            return (int(x)>int(y))-(int(x)<int(y))
+        if x.isdigit()!=y.isdigit():return -1 if x.isdigit() else 1
+        return (x>y)-(x<y)
+    return (len(aa)>len(bb))-(len(aa)<len(bb))
+
+
 def matches(version, rule):
     """True, False, or None when comparison needs the loader itself."""
-    def term(t):
+    def term(t, fabric=False, forge=False):
         if t == '*':
             return True
         m = re.fullmatch(r'(>=|<=|>|<|=|~|\^)?(.+)', t)
@@ -28,6 +83,25 @@ def matches(version, rule):
         op, ref = m.groups()
         if op in (None, '=') and version == ref:
             return True
+        if forge and ('-' in version or '-' in ref):
+            comparison=maven_compare(version,ref)
+            if comparison is None:return None
+            return {None:comparison==0,'=':comparison==0,'>':comparison>0,'<':comparison<0,'>=':comparison>=0,'<=':comparison<=0}.get(op)
+        if fabric:
+            wildcard=re.fullmatch(r'(\d+(?:\.\d+)*)(?:\.[xX*])+',ref)
+            if wildcard and not op:
+                base=wildcard[1];parts=list(map(int,base.split('.')));parts[-1]+=1
+                low=fabric_compare(version,base+'-');high=fabric_compare(version,'.'.join(map(str,parts))+'-')
+                return None if low is None or high is None else low>=0 and high<0
+            comparison=fabric_compare(version,ref)
+            if comparison is None:return None
+            if op in ('^','~'):
+                nums=list(map(int,ref.split('+')[0].split('-')[0].split('.')))
+                index=0 if op=='^' else 1
+                nums += [0]*max(0,index+1-len(nums));nums=nums[:index+1];nums[index]+=1
+                upper=fabric_compare(version,'.'.join(map(str,nums))+'-')
+                return comparison>=0 and upper<0
+            return {None:comparison==0,'=':comparison==0,'>':comparison>0,'<':comparison<0,'>=':comparison>=0,'<=':comparison<=0}[op]
         def parts(s):
             s = s.split('+')[0]
             return list(map(int, s.split('.'))) if re.fullmatch(r'\d+(?:\.\d+)*', s) else None
@@ -52,7 +126,7 @@ def matches(version, rule):
                 '^':a>=b and a[0]==b[0], '~':a>=b and a[:2]==b[:2]}[op]
     alternatives = []
     for expr in rule if isinstance(rule,list) else [rule]:
-        terms = [term(t) for t in expr.split()] if isinstance(expr,str) else []
+        terms = [term(t,isinstance(expr,FabricRule),isinstance(expr,ForgeRule)) for t in expr.split()] if isinstance(expr,str) else []
         alternatives.append(False if False in terms else None if not terms or None in terms else True)
     return True if True in alternatives else None if None in alternatives else False
 
@@ -61,16 +135,24 @@ def metadata(source,loader='fabric'):
     if loader=='mix':
         with zipfile.ZipFile(source) as jar:
             names=set(jar.namelist())
-            if 'META-INF/mods.toml' in names or 'META-INF/jarjar/metadata.json' in names:
-                return metadata(source,'forge')
             if 'META-INF/MANIFEST.MF' in names and 'META-INF/services/cpw.mods.modlauncher.api.ITransformationService' in names:
                 manifest=jar.read('META-INF/MANIFEST.MF').decode('utf8','replace').replace('\r\n ','')
                 fields=dict(line.split(': ',1) for line in manifest.splitlines() if ': ' in line)
                 if fields.get('Automatic-Module-Name')=='org.sinytra.connector':
                     return [dict(id='connector',provides=['connectormod'],version=fields.get('Implementation-Version','?'),depends={'fabric_api':'*'})]
+            if 'META-INF/mods.toml' in names or 'META-INF/jarjar/metadata.json' in names:
+                mods=metadata(source,'forge')
+                for mod in mods:
+                    if mod['id'] in ('connector','connectormod'):
+                        mod.setdefault('provides',[]).extend(k for k in ('connector','connectormod') if k != mod['id'] and k not in mod.get('provides',[]))
+                        mod.setdefault('depends',{}).setdefault('fabric_api','*')
+                return mods
         mods=metadata(source,'fabric')
+        if mods and mods[0]['id']=='forgeconfigapiport' and 'net/minecraftforge/fml/config/ModConfig.class' in names:
+            mods[0]['_loader_problem']='Fabric 配置移植包与 Forge 自带配置类重复；需要 Connector Extras 的桥接实现'
         if mods:
             mods[0].setdefault('depends',{}).setdefault('connector','*')
+            mods[0]['depends'].setdefault('fabric_api','*')
             if mods[0]['id']=='fabric-api':
                 mods[0].setdefault('breaks',{})['fabric_api']='*'
         return mods
@@ -97,6 +179,10 @@ def metadata(source,loader='fabric'):
                 raise ValueError('无法识别模组别名')
             if m.get('environment') == 'server':
                 return []
+            for field in ('depends','breaks','conflicts'):
+                for key,rule in m.get(field,{}).items():
+                    m[field][key]=[FabricRule(x) if isinstance(x,str) else x for x in rule] if isinstance(rule,list) else FabricRule(rule) if isinstance(rule,str) else rule
+            m['_platform']='fabric'
             result = [m]
             for item in m.get('jars', []):
                 info = z.getinfo(item['file'])
@@ -128,6 +214,10 @@ def analyze(active, game, repairs=None, diagnostics=None):
     for f, mods in active.items():
         for m in mods:
             name = m['id']
+            problem=m.get('_runtime_failure') or m.get('_loader_problem')
+            if problem:
+                issue('error',name,name,'*',[m['version']],problem)
+                if repairs is not None and m is mods[0]:repairs[name]=f
             if m is mods[0]:
                 for g, other in providers[name]:
                     if active[g][0] is other and other['id']==name:
@@ -178,9 +268,9 @@ class JobStopped(RuntimeError):
 
 
 class LookupControl:
-    def __init__(self, progress=lambda message: None, seconds=120):
+    def __init__(self, progress=lambda message: None, seconds=None):
         self.cancelled=threading.Event()
-        self.deadline=time.monotonic()+seconds
+        self.deadline=float("inf") if seconds is None else time.monotonic()+seconds
         self.progress=progress
     def check(self):
         if self.cancelled.is_set():raise JobStopped('已取消查找，游戏文件未修改')
@@ -193,7 +283,7 @@ class LookupControl:
 def fetch(url, limit, control=None):
     control=control or LookupControl()
     control.check()
-    request=Request(url,headers={'User-Agent':'FabricMedic/2.1 (local desktop utility)'})
+    request=Request(url,headers={'User-Agent':'FabricMedic/2.3 (local desktop utility)'})
     try:
         with urlopen(request,timeout=max(.1,min(8,control.deadline-time.monotonic()))) as r:
             chunks=[];total=0;last=0
@@ -259,15 +349,15 @@ def cached_jar(file, control=None):
 _list_cache={}
 
 
-def resolve(target, requirements, game, folder, accept=None, loader='fabric', project=None, file_loader=None, control=None):
+def resolve(target, requirements, game, folder, accept=None, loader='fabric', project=None, file_loader=None, control=None, native_only=False):
     control=control or LookupControl()
     control.check()
     if loader=='mix':
-        bridge={'connector':'connector','connectormod':'connector','fabric_api':'forgified-fabric-api','fabric-api':'forgified-fabric-api','fabric':'forgified-fabric-api'}
+        bridge={'forgeconfigapiport':'connector-extras','connector':'connector','connectormod':'connector','fabric_api':'forgified-fabric-api','fabric-api':'forgified-fabric-api','fabric':'forgified-fabric-api'}
         errors=[]
-        for platform in (('forge',) if target in bridge else ('forge','fabric')):
+        for platform in (('forge',) if target in bridge or native_only else ('forge','fabric')):
             try:
-                return resolve(target,requirements,game,folder,accept,platform,bridge.get(target),'mix',control)
+                return resolve(target,requirements,game,folder,accept,platform,bridge.get(target),'mix',control,native_only)
             except ValueError as exc:
                 errors.append(str(exc))
             except HTTPError as exc:
@@ -275,7 +365,7 @@ def resolve(target, requirements, game, folder, accept=None, loader='fabric', pr
                 errors.append(str(exc))
         raise ValueError('没有找到兼容桥接组合的 '+target+'：'+' / '.join(errors))
     aliases={'cloth-config':'cloth-config','cloth_config':'cloth-config','fabric':'fabric-api',
-             'fabric-api':'fabric-api','mezz_config':'mezzconfig','fabric-language-kotlin':'fabric-language-kotlin'}
+             'fabric-api':'fabric-api','inventoryprofilesnext':'inventory-profiles-next','yet_another_config_lib_v3':'yacl','puzzleslib':'puzzles-lib','kotlinforforge':'kotlin-for-forge','mezz_config':'mezzconfig','fabric-language-kotlin':'fabric-language-kotlin'}
     slug=project or aliases.get(target,target.replace('_','-'))
     query=urlencode({'loaders':json.dumps([loader]), 'game_versions':json.dumps([game])})
     url='https://api.modrinth.com/v2/project/'+quote(slug,safe='')+'/version?'+query
@@ -289,8 +379,6 @@ def resolve(target, requirements, game, folder, accept=None, loader='fabric', pr
     for v in versions[:40]:
         # Download only a candidate whose published version plausibly satisfies the constraints.
         rules=[r for _,r in requirements]
-        if any(matches(v['version_number'],r) is False for r in rules):
-            continue
         files=[f for f in v['files'] if f.get('primary') and f['filename'].lower().endswith('.jar')]
         if not files:
             continue
@@ -310,6 +398,8 @@ def resolve(target, requirements, game, folder, accept=None, loader='fabric', pr
                 data=job.result()
                 control.check()
                 mods=metadata(io.BytesIO(data),file_loader or loader)
+                if any(m.get('_loader_problem') for m in mods):continue
+                if native_only and (not mods or mods[0].get('_platform')!='forge'):continue
                 if accept and not accept(mods):
                     continue
                 if any(target in ids(m) and all(matches(m['version'],r) is True for r in rules) for m in mods):
@@ -334,6 +424,10 @@ def verify_selection(live, changed, game):
                 providers.setdefault(key,[]).append(mod['version'])
     touched={key for p in changed for mod in live[p] for key in ids(mod)}
     problems=[]
+    for group in live.values():
+        for mod in group:
+            problem=mod.get('_runtime_failure') or mod.get('_loader_problem')
+            if problem:problems.append(mod['id']+'：'+problem)
     for file,group in live.items():
         for mod in group:
             for key,rule in mod.get('depends',{}).items():

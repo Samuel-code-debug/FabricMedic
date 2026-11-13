@@ -15,7 +15,7 @@ class App(Workbench):
     def __init__(self, win):
         self.win=win
         threading.excepthook=self._thread_crash
-        win.title('Fabric Medic v2.2')
+        win.title('Fabric Medic v2.3')
         import sys
         icon=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent))/'app.ico'
         if icon.is_file():win.iconbitmap(str(icon))
@@ -163,10 +163,18 @@ class App(Workbench):
             except Exception as e:
                 self.mods[p]=[]
                 self.reasons[p]='保留未识别文件：'+str(e)
+        if self.loader=='mix':
+            from runtime_diagnostics import attach_runtime_failures
+            attach_runtime_failures(self.folder,self.mods)
         self.version_title.configure(text=self.folder.parent.name)
         self.location.config(text=f'{self.loader.title()}   ·   Minecraft {self.version}   ·   {len(self.disk)} 个模组文件')
         self.initial_off=set(self.off)
         self.refresh()
+        if self.loader=='mix':
+            from discovery import inspect_instance
+            record=inspect_instance(self.folder)
+            if record and record['loader']=='fabric':
+                self.say('Mix 使用 Forge + Connector 桥接。当前实例实际为 Fabric；需要先建立 Forge 实例，切换检测模式不会安装或更换加载器。',append=True)
 
     def active(self):
         return {p:m for p,m in self.mods.items() if p not in self.off}
@@ -199,7 +207,7 @@ class App(Workbench):
             state='× 移出' if p in self.off else '＋ 待安装' if p in self.proposed else ('⚠ 缺前置' if lacking else '✓ 保留')
             if p in repairs.values():
                 state='⚠ 待替换'
-                details.insert(0,'依赖版本不符：现有 '+self.mods[p][0]['version'])
+                details.insert(0,self.mods[p][0].get('_runtime_failure') or self.mods[p][0].get('_loader_problem') or ('依赖版本不符：现有 '+self.mods[p][0]['version']))
             if p in self.swaps:
                 state='↻ 备份替换'
                 details.insert(0,'替换为 '+self.mods[self.swaps[p]][0]['version'])
@@ -220,7 +228,7 @@ class App(Workbench):
         review=sum(k[0]=='review' for k in grouped)+unknown
         errors=sum(k[0]=='error' for k in grouped)+len(pairs)+len(self.initial_off)
         self.scan_summary.configure(text=f'{errors} 项明确问题   /   {review} 项待核实   /   {len(self.proposed)} 个待安装文件')
-        self.next_step.configure(text='方案已准备，请查看变更再应用。' if self.proposed else '待核实项不会自动修改；可运行的整合包无需因为提示而修复。' if review else '按声明检查完成，请以游戏实际启动结果为准。')
+        self.next_step.configure(text='方案已准备，请查看变更再应用。' if self.proposed else '待核实项不会自动修改；可运行的整合包无需因为提示而修复。' if review else '发现明确问题，请先生成修复方案并复测启动。' if errors else '按声明检查完成，请以游戏实际启动结果为准。')
         detail=[f'{a.name} ↔ {b.name}：'+ '；'.join(sorted(v)) for (a,b),v in pairs.items()]
         for (level,target,reason),items in grouped.items():
             label={'error':'明确问题','review':'待核实','info':'普通提示'}[level]
@@ -294,6 +302,11 @@ class App(Workbench):
         self.refresh()
 
     def check(self):
+        if self.loader=='mix' and self.folder:
+            from discovery import inspect_instance
+            record=inspect_instance(self.folder)
+            if record and record['loader']=='fabric':
+                raise ValueError('当前实例使用 Fabric Loader。Mix 需要 Forge + Connector；请先建立 Forge 实例再生成或应用桥接方案。')
         if not self.folder or not hasattr(self,'disk'):
             raise ValueError('请先选择实例并扫描')
         if self.version!=self.game.get().strip() or self.disk!=self.snapshot():
@@ -314,7 +327,7 @@ class App(Workbench):
                 if any(matches(self.version,m.get('depends',{}).get('minecraft','*')) is False for m in group):
                     wrong_game[group[0]['id']]=path
         repairs={}
-        if not analyze(active,self.version,repairs)[1] and not repairs and not wrong_game:
+        if not analyze(active,self.version,repairs)[1] and not repairs and not wrong_game and not (self.loader=='mix' and any(g and g[0]['id']=='fabric-api' for g in active.values())):
             self.refresh('没有缺失或可自动替换的前置。')
             return
         self.busy=True
@@ -322,84 +335,13 @@ class App(Workbench):
         out=queue.Queue()
         progress=queue.Queue()
         self.say('正在查找并校验兼容版本，全部就绪后将自动安装。' if automatic and not preview else '正在生成修复方案，下载校验后供你确认，不会直接修改模组。')
-        control=self.lookup_control=LookupControl(progress.put,seconds=120)
+        control=self.lookup_control=LookupControl(progress.put)
         resolver=lambda *args,**kw:resolve(*args,**kw,loader=self.loader,control=control)
         def worker():
-            found={}
-            errors=[]
-            tried=set()
-            swaps={}
-            try:
-                for _ in range(60):
-                    control.check()
-                    live={p:m for p,m in (active|found).items() if p not in swaps}
-                    repairs={}
-                    missing=analyze(live,self.version,repairs)[1]
-                    repairs.update({k:p for k,p in wrong_game.items() if p in live})
-                    targets=sorted((missing.keys()|repairs.keys())-tried,key=lambda key:(key not in wrong_game,key))
-                    if not targets:
-                        break
-                    k=targets[0]
-                    tried.add(k)
-                    progress.put('正在查找 '+k+' …')
-                    try:
-                        old=repairs.get(k)
-                        if old and (old not in self.disk or old in self.swaps.values()):
-                            raise ValueError('该组件已在方案中，请人工核对')
-                        rules=[(m['id'],m['depends'][k]) for group in live.values() for m in group if k in m.get('depends',{})]
-                        def game_ok(group):
-                            return all(matches(self.version,m.get('depends',{}).get('minecraft','*')) is not False for m in group)
-                        try:
-                            if k in wrong_game:
-                                p,mods=resolver(k,rules,self.version,Path(self.temp.name),accept=game_ok)
-                            else:
-                                p,mods=resolver(k,rules,self.version,Path(self.temp.name))
-                        except ValueError as reason:
-                            if k in wrong_game or '没有找到' not in str(reason):
-                                raise
-                            owners=[f for f,group in live.items() if any(k in m.get('depends',{}) for m in group)]
-                            if len(owners)!=1 or owners[0] not in self.disk or owners[0] in swaps:
-                                raise
-                            installed=live[old][0]['version'] if old else None
-                            old=owners[0]
-                            dep=k
-                            k=live[old][0]['id']
-                            requires=[(m['id'],m['depends'][k]) for group in live.values() for m in group if k in m.get('depends',{})]
-                            progress.put('前置无匹配版本，正在查找兼容的 '+k+' 版本 …')
-                            def compatible(group):
-                                if not game_ok(group):return False
-                                dependency_rules=[(m['id'],m['depends'][dep]) for m in group if dep in m.get('depends',{})]
-                                if not dependency_rules:return True
-                                if installed is not None:
-                                    return all(matches(installed,rule) is True for _,rule in dependency_rules)
-                                try:
-                                    resolver(dep,dependency_rules,self.version,Path(self.temp.name),accept=game_ok)
-                                    return True
-                                except ValueError:
-                                    return False
-                            p,mods=resolver(k,requires,self.version,Path(self.temp.name),accept=compatible)
-                            tried.discard(dep)
-                            progress.put('兼容方案：替换 '+k+' '+live[old][0]['version']+' → '+mods[0]['version'])
-                        if (not automatic and p in self.off) or any(f.name==p.name for f in self.disk):
-                            raise ValueError('同名文件已存在或已手动取消')
-                        if old:
-                            if mods[0]['id']!=k:
-                                raise ValueError('候选文件不是同一独立模组')
-                            trial={f:group for f,group in live.items() if f!=old}
-                            trial[p]=mods
-                            if any(p in pair for pair in analyze(trial,self.version)[0]):
-                                raise ValueError('候选版本与当前保留的模组有已声明冲突')
-                            swaps[old]=p
-                        found[p]=mods
-                    except JobStopped:
-                        raise
-                    except Exception as e:
-                        errors.append(f'{k}：{e}')
-                        progress.put('　'+k+'：'+str(e))
-            except BaseException as e:
-                errors.append(f'{type(e).__name__}: {e}')
-            finally:
-                out.put((found,errors,swaps))
+            from repair import build_plan
+            out.put(build_plan(active,self.version,Path(self.temp.name),resolver,control,
+                loader=self.loader,disk=self.disk,wrong_game=wrong_game,
+                existing_swaps=self.swaps,off=self.off,automatic=automatic))
         started=time.monotonic()
         def finish():
             while not progress.empty():
@@ -407,7 +349,7 @@ class App(Workbench):
             self._log_append=True
             if out.empty():
                 elapsed=int(time.monotonic()-started)
-                if not control.cancelled.is_set():self.output_summary.configure(text=f'正在查找兼容版本 · 已用 {elapsed} 秒 / 最长 120 秒')
+                if not control.cancelled.is_set():self.output_summary.configure(text=f'正在查找兼容版本 · 已用 {elapsed} 秒')
                 self.win.after(150,finish)
                 return
             found,errors,swaps=out.get()
@@ -421,7 +363,7 @@ class App(Workbench):
                     self.check()
                     if errors:
                         raise ValueError('\n'.join(errors))
-                    if not found:
+                    if not found and not swaps:
                         raise ValueError('没有找到可安装的文件')
                     kept={p:m for p,m in active.items() if p not in swaps}
                     batch=install_verified(self.folder,swaps,found,kept,self.version,self.loader)

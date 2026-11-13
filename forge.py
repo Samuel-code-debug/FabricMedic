@@ -5,9 +5,9 @@ import zipfile
 import json
 
 
-def requirement(value):
+def _requirement(value):
     value=str(value).strip()
-    if not value:return '*'
+    if not value or value=='*':return '*'
     if value.startswith('[') and value.endswith(']') and ',' not in value:return value[1:-1]
     groups=re.findall(r'([\[(])([^\[\]()]*?)([\])])',value)
     if not groups:
@@ -20,6 +20,12 @@ def requirement(value):
         low,high=map(str.strip,body.split(',',1))
         result.append(' '.join(filter(None,[(('>=' if left=='[' else '>')+low) if low else '',(('<=' if right==']' else '<')+high) if high else ''])) or '*')
     return result
+
+
+def requirement(value):
+    from core import ForgeRule
+    result=_requirement(value)
+    return [ForgeRule(x) for x in result] if isinstance(result,list) else ForgeRule(result)
 
 
 def read(source,depth=0,budget=None):
@@ -38,7 +44,9 @@ def read(source,depth=0,budget=None):
             if version=='${file.jarVersion}' and 'META-INF/MANIFEST.MF' in z.namelist():
                 found=re.search(r'(?im)^Implementation-Version: ([^\r\n]+)',load('META-INF/MANIFEST.MF').decode('utf8','replace'))
                 if found:version=found[1]
-            m=dict(id=key,version=version,depends={},breaks={},conflicts={})
+            m=dict(id=key,version=version,depends={},breaks={},conflicts={},_platform='forge')
+            if 'loaderVersion' in doc and not str(doc['loaderVersion']).strip():
+                m['_loader_problem']='Forge 加载语言版本声明为空'
             m['provides']=entry.get('provides',[])
             for d in doc.get('dependencies',{}).get(key,[]):
                 target=d['modId']
